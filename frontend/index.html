@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>微信读书 · AI 阅读评价</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #f5f5f5; color: #333; padding: 20px; max-width: 900px; margin: 0 auto;
+}
+h1 { font-size: 24px; margin-bottom: 4px; color: #1a1a1a; text-align: center; }
+.subtitle { font-size: 14px; color: #888; text-align: center; margin-bottom: 20px; }
+
+/* ── Step Indicator ── */
+.steps {
+  display: flex; justify-content: center; margin-bottom: 24px; padding: 0 10px;
+}
+.step-item {
+  display: flex; flex-direction: column; align-items: center; flex: 1;
+  position: relative; cursor: default;
+}
+.step-item::after {
+  content: ''; position: absolute; top: 16px; left: 50%; width: 100%;
+  height: 2px; background: #e0e0e0; z-index: 0;
+}
+.step-item:last-child::after { display: none; }
+.step-item.completed::after { background: #07c160; }
+.step-item.active::after { background: #07c160; }
+.step-number {
+  width: 32px; height: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; z-index: 1;
+  background: #e0e0e0; color: #999; transition: all .2s;
+  position: relative;
+}
+.step-item.active .step-number { background: #07c160; color: #fff; box-shadow: 0 0 0 3px #b5f0c8; }
+.step-item.completed .step-number { background: #07c160; color: #fff; font-size: 16px; }
+.step-label {
+  font-size: 10px; margin-top: 4px; color: #bbb; white-space: nowrap;
+  transition: color .2s;
+}
+.step-item.active .step-label { color: #07c160; font-weight: 600; }
+.step-item.completed .step-label { color: #666; }
+
+/* ── Cards ── */
+.card {
+  background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+.card h2 { font-size: 18px; margin-bottom: 12px; color: #1a1a1a; display: flex; align-items: center; gap: 8px; }
+.card h2 .step-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 50%; background: #07c160;
+  color: #fff; font-size: 13px; font-weight: 700;
+}
+.card-desc { font-size: 14px; color: #666; margin-bottom: 16px; line-height: 1.6; }
+
+/* ── Buttons ── */
+button {
+  padding: 10px 24px; font-size: 15px; border: none; border-radius: 6px;
+  cursor: pointer; background: #07c160; color: #fff; transition: opacity .15s;
+}
+button:hover { opacity: .85; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.btn-sm {
+  padding: 6px 14px; font-size: 13px; border: none; border-radius: 4px;
+  cursor: pointer; background: #2979ff; color: #fff;
+}
+.btn-sm:hover { opacity: .85; }
+.btn-outline {
+  background: #fff; color: #666; border: 1px solid #ddd;
+}
+.btn-nav {
+  padding: 8px 20px; font-size: 14px;
+}
+.btn-nav.prev { background: #fff; color: #666; border: 1px solid #ddd; }
+.btn-nav.next { background: #07c160; color: #fff; }
+.btn-nav.next:disabled { opacity: .5; }
+.nav-row {
+  display: flex; justify-content: space-between; align-items: center; margin-top: 20px; gap: 12px;
+}
+.nav-row.center { justify-content: center; }
+
+/* ── Form ── */
+.form-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0;
+}
+.form-grid label {
+  display: flex; flex-direction: column; font-size: 12px; color: #666; gap: 3px;
+}
+.form-grid input, .form-grid select {
+  padding: 8px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;
+}
+.form-grid input:focus { border-color: #07c160; outline: none; box-shadow: 0 0 0 2px #b5f0c8; }
+.form-grid .full-width { grid-column: 1 / -1; }
+
+/* ── Status badges ── */
+.status-badge {
+  display: inline-block; padding: 4px 12px; border-radius: 12px;
+  font-size: 13px; font-weight: 500;
+}
+.status-badge.waiting { background: #fff3cd; color: #856404; }
+.status-badge.ok { background: #d4edda; color: #155724; }
+.status-badge.error { background: #f8d7da; color: #721c24; }
+.status-badge.working { background: #cce5ff; color: #004085; }
+
+/* ── Progress Bar ── */
+.progress-bar {
+  height: 6px; background: #eee; border-radius: 3px; overflow: hidden; margin: 8px 0;
+}
+.progress-bar .fill {
+  height: 100%; background: #07c160; border-radius: 3px; transition: width .3s;
+}
+
+/* ── QR Code ── */
+#qr-container {
+  display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 16px 0;
+}
+#qr-container img {
+  width: 220px; height: 220px; border: 1px solid #ddd; border-radius: 6px;
+  image-rendering: pixelated;
+}
+
+/* ── Timeline Filter ── */
+.filter-dates { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin: 12px 0; }
+.filter-dates label { display: flex; flex-direction: column; font-size: 12px; color: #666; gap: 2px; }
+.filter-dates input[type=date] { padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; }
+.filter-info { font-size: 13px; color: #888; margin: 8px 0; }
+.filter-book-list { max-height: 350px; overflow-y: auto; border: 1px solid #eee; border-radius: 6px; margin: 12px 0; }
+.filter-book-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: 13px; }
+.filter-book-item:hover { background: #f8f9fa; }
+.filter-book-item:last-child { border-bottom: none; }
+.filter-book-item input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; accent-color: #07c160; }
+.filter-book-item.checked { }
+.filter-book-item.unchecked { opacity: 0.5; }
+.filter-book-title { flex: 1; }
+.filter-book-time { font-size: 11px; color: #999; white-space: nowrap; }
+.filter-select-all { display: flex; gap: 12px; align-items: center; margin: 8px 0; font-size: 13px; color: #666; }
+.filter-select-all label { cursor: pointer; display: flex; align-items: center; gap: 4px; }
+
+/* ── Book Cards ── */
+.book-card {
+  border: 1px solid #eee; border-radius: 6px; padding: 12px; margin-bottom: 8px;
+}
+.book-card .meta { font-size: 13px; color: #666; margin: 4px 0; }
+.book-card summary { cursor: pointer; font-weight: 500; }
+.book-card.deleted { opacity: 0.45; pointer-events: none; }
+.book-card.deleted .delete-btn { display: none; }
+.deleted-badge {
+  display: inline-block; font-size: 11px; color: #999; margin-left: 8px;
+}
+.delete-btn {
+  background: none; border: 1px solid #e0e0e0; color: #999; cursor: pointer;
+  font-size: 12px; padding: 2px 10px; border-radius: 4px; margin-left: 8px;
+}
+.delete-btn:hover { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
+.stats-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px; margin: 12px 0;
+}
+.stat-box {
+  background: #f8f9fa; border-radius: 6px; padding: 12px; text-align: center;
+}
+.stat-box .num { font-size: 24px; font-weight: 700; color: #07c160; }
+.stat-box .label { font-size: 12px; color: #888; margin-top: 4px; }
+details { margin: 8px 0; }
+details[open] summary { margin-bottom: 8px; }
+summary { cursor: pointer; padding: 4px 0; font-weight: 500; }
+pre {
+  background: #f8f9fa; border: 1px solid #ddd; border-radius: 6px;
+  padding: 10px; overflow-x: auto; max-height: 500px; line-height: 1.5;
+  font-family: "SF Mono", "Fira Code", monospace; font-size: 13px;
+}
+.btn-link {
+  background: none; border: none; color: #2979ff; cursor: pointer;
+  font-size: 13px; padding: 4px 0; text-decoration: underline; display: inline-block;
+}
+.btn-link:hover { color: #1a56db; }
+
+/* ── Test Result ── */
+.test-result { font-size: 13px; padding: 8px 12px; border-radius: 6px; margin-top: 8px; }
+.test-result.ok { background: #d4edda; color: #155724; }
+.test-result.error { background: #f8d7da; color: #721c24; }
+.test-result.working { background: #cce5ff; color: #004085; }
+
+/* ── AI Report Styles ── */
+.style-toggle { display: flex; gap: 8px; margin: 16px 0; }
+.style-btn {
+  flex: 1; padding: 12px 16px; font-size: 15px; border: 2px solid #ddd;
+  border-radius: 8px; cursor: pointer; background: #fff; color: #666;
+  transition: all .15s;
+}
+.style-btn.active {
+  border-color: #07c160; background: #e8f5e9; color: #07c160; font-weight: 600;
+}
+.score-circle {
+  width: 100px; height: 100px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 36px; font-weight: 700; color: #fff; margin: 0 auto;
+}
+.score-circle.high { background: linear-gradient(135deg, #07c160, #00a854); }
+.score-circle.mid { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.score-circle.low { background: linear-gradient(135deg, #ef4444, #dc2626); }
+.report-header { text-align: center; margin-bottom: 20px; }
+.one-liner {
+  font-size: 18px; font-weight: 600; text-align: center;
+  padding: 12px; margin: 12px 0; border-radius: 8px;
+  background: linear-gradient(135deg, #667eea22, #764ba222);
+  color: #4a4a6a; line-height: 1.6;
+}
+.summary-text {
+  font-size: 14px; line-height: 1.8; color: #444; margin: 12px 0; padding: 0 4px;
+}
+.dim-section { margin: 16px 0; }
+.dim-card {
+  background: #f8f9fa; border-radius: 8px; padding: 12px; margin-bottom: 8px;
+}
+.dim-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;
+}
+.dim-name { font-weight: 600; font-size: 14px; }
+.dim-score { font-weight: 700; font-size: 16px; }
+.dim-bar {
+  height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; margin: 4px 0 6px;
+}
+.dim-bar .fill { height: 100%; border-radius: 3px; transition: width .5s; }
+.dim-bar .fill.high { background: #07c160; }
+.dim-bar .fill.mid { background: #f59e0b; }
+.dim-bar .fill.low { background: #ef4444; }
+.dim-comment { font-size: 13px; color: #555; line-height: 1.6; }
+.dim-evidence {
+  font-size: 12px; color: #888; font-style: italic; margin-top: 4px;
+  padding: 4px 8px; background: #fff; border-radius: 4px; border-left: 3px solid #ddd;
+}
+.tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.tag {
+  display: inline-block; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500;
+}
+.tag.green { background: #d4edda; color: #155724; }
+.tag.red { background: #f8d7da; color: #721c24; }
+.pick-card {
+  border: 1px solid #eee; border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 13px;
+}
+.pick-card.top { border-left: 3px solid #07c160; }
+.pick-card.flop { border-left: 3px solid #ef4444; }
+.pick-card .pick-title { font-weight: 600; }
+.pick-card .pick-reason { color: #666; margin-top: 2px; }
+.reco-list { padding-left: 20px; font-size: 13px; color: #444; line-height: 1.8; }
+.report-footer { text-align: center; font-size: 12px; color: #aaa; margin-top: 20px; padding-top: 12px; border-top: 1px solid #eee; }
+.hidden { display: none !important; }
+.mt-8 { margin-top: 8px; }
+.mt-16 { margin-top: 16px; }
+.mb-8 { margin-bottom: 8px; }
+.flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.section-divider { border: none; border-top: 1px solid #eee; margin: 16px 0; }
+</style>
+</head>
+<body>
+
+<h1>微信读书 · AI 阅读评价</h1>
+<p class="subtitle">提取微信读书数据，生成 AI 阅读分析报告</p>
+
+<!-- ── Step Indicator ── -->
+<div class="steps" id="step-indicator">
+  <div class="step-item active" data-step="1">
+    <div class="step-number">1</div>
+    <div class="step-label">配置 API</div>
+  </div>
+  <div class="step-item" data-step="2">
+    <div class="step-number">2</div>
+    <div class="step-label">扫码登录</div>
+  </div>
+  <div class="step-item" data-step="3">
+    <div class="step-number">3</div>
+    <div class="step-label">提取筛选</div>
+  </div>
+  <div class="step-item" data-step="4">
+    <div class="step-number">4</div>
+    <div class="step-label">审核删除</div>
+  </div>
+  <div class="step-item" data-step="5">
+    <div class="step-number">5</div>
+    <div class="step-label">AI 评价</div>
+  </div>
+  <div class="step-item" data-step="6">
+    <div class="step-number">6</div>
+    <div class="step-label">查看报告</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<!-- Step 1: LLM API Configuration          -->
+<!-- ═══════════════════════════════════════ -->
+<div class="card step-panel" id="step-1">
+  <h2><span class="step-badge">1</span> 配置 AI 接口</h2>
+  <p class="card-desc">配置 AI 模型的 API 信息，用于后续生成阅读评价报告。所有数据仅保存在本地服务器。</p>
+
+  <div class="form-grid">
+    <label class="full-width">API Base URL
+      <input type="text" id="llm-base-url" placeholder="https://api.openai.com/v1">
+    </label>
+    <label>Model
+      <input type="text" id="llm-model" placeholder="gpt-4o-mini">
+    </label>
+    <label>Temperature
+      <input type="number" id="llm-temp" placeholder="0.8" step="0.1" min="0" max="2">
+    </label>
+    <label class="full-width">API Key
+      <input type="password" id="llm-api-key" placeholder="sk-...">
+    </label>
+  </div>
+
+  <div id="test-result" class="hidden"></div>
+
+  <div class="nav-row">
+    <div></div>
+    <div class="flex">
+      <button id="test-btn" class="btn-sm" style="background:#666;">测试连接</button>
+      <button id="config-save-btn" class="btn-nav next">保存并继续 →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<!-- Step 2: Login                          -->
+<!-- ═══════════════════════════════════════ -->
+<div class="card step-panel hidden" id="step-2">
+  <h2><span class="step-badge">2</span> 扫码登录</h2>
+  <p class="card-desc">通过微信扫码登录微信读书，获取你的阅读数据。</p>
+
+  <div style="text-align:center;">
+    <button id="start-btn" style="font-size:16px;padding:12px 32px;">📱 扫码登录</button>
+  </div>
+
+  <div id="qr-area" class="hidden">
+    <div id="qr-container">
+      <img id="qr-img" alt="QR Code">
+      <div id="login-status"><span class="status-badge waiting">等待扫码...</span></div>
+    </div>
+  </div>
+
+  <div class="nav-row">
+    <button class="btn-nav prev" onclick="goStep(1)">← 上一步</button>
+    <div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<!-- Step 3: Extract & Filter               -->
+<!-- ═══════════════════════════════════════ -->
+<div class="card step-panel hidden" id="step-3">
+  <h2><span class="step-badge">3</span> 提取阅读数据</h2>
+  <p class="card-desc">从微信读书提取你有笔记的书籍，然后选择时间范围和书籍用于 AI 评价。</p>
+
+  <div id="extract-start-area">
+    <button id="extract-btn" style="font-size:16px;padding:12px 32px;">🚀 开始提取</button>
+  </div>
+
+  <div id="extract-status" class="hidden mt-8">
+    <div class="progress-bar"><div class="fill" id="progress-fill"></div></div>
+    <div id="progress-text" style="font-size:13px;color:#666;"></div>
+  </div>
+
+  <!-- Timeline Filter (shown after timeline scan) -->
+  <div id="filter-area" class="hidden">
+    <hr class="section-divider">
+    <h3 style="font-size:15px;margin-bottom:8px;">📅 选择时间范围与书籍</h3>
+    <p style="font-size:13px;color:#666;margin-bottom:8px;">
+      选择时间范围筛选，或取消勾选你不希望被评价的书籍。
+    </p>
+    <div class="filter-dates">
+      <label>起始日期 <input type="date" id="filter-start"></label>
+      <label>结束日期 <input type="date" id="filter-end"></label>
+      <button id="filter-confirm-btn" class="btn-sm" style="background:#07c160;padding:8px 24px;">确认并开始导入</button>
+    </div>
+    <div class="filter-info" id="filter-info"></div>
+    <div class="filter-select-all">
+      <label><input type="checkbox" id="filter-select-all" checked> 全选/取消全选</label>
+      <span id="filter-selected-count" style="color:#999;"></span>
+    </div>
+    <div class="filter-book-list" id="filter-book-list"></div>
+  </div>
+
+  <div class="nav-row">
+    <button class="btn-nav prev" onclick="goStep(2)">← 上一步</button>
+    <div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<!-- Step 4: Review & Delete Books           -->
+<!-- ═══════════════════════════════════════ -->
+<div class="card step-panel hidden" id="step-4">
+  <h2><span class="step-badge">4</span> 审核书籍</h2>
+  <p class="card-desc">查看已提取的书籍数据，你可以删除不希望参与评价的书籍。删除后数据仍保存在本地。</p>
+
+  <div id="stats-summary"></div>
+  <div id="books-container"></div>
+  <details class="mt-8">
+    <summary>原始 JSON</summary>
+    <pre id="raw-json"></pre>
+  </details>
+
+  <div class="nav-row">
+    <button class="btn-nav prev" onclick="goStep(3)">← 上一步</button>
+    <button class="btn-nav next" id="to-ai-btn" disabled>继续到 AI 评价 →</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<!-- Step 5: AI Evaluation                   -->
+<!-- ═══════════════════════════════════════ -->
+<div class="card step-panel hidden" id="step-5">
+  <h2><span class="step-badge">5</span> AI 阅读评价</h2>
+  <p class="card-desc">选择评价风格，让 AI 分析你的阅读数据并生成报告。</p>
+
+  <div class="style-toggle">
+    <button class="style-btn active" data-style="serious">📖 正经分析</button>
+    <button class="style-btn" data-style="sarcastic">🔥 毒舌吐槽</button>
+  </div>
+
+  <div style="text-align:center;margin:16px 0;">
+    <button id="ai-btn" style="font-size:16px;padding:12px 32px;" disabled>🤖 生成 AI 评价报告</button>
+  </div>
+
+  <div id="ai-status" class="hidden mt-8">
+    <div class="progress-bar"><div class="fill" id="ai-progress-fill"></div></div>
+    <div id="ai-progress-text" style="font-size:13px;color:#666;margin-top:4px;"></div>
+  </div>
+
+  <div class="nav-row">
+    <button class="btn-nav prev" onclick="goStep(4)">← 上一步</button>
+    <div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<!-- Step 6: Report                          -->
+<!-- ═══════════════════════════════════════ -->
+<div class="card step-panel hidden" id="step-6">
+  <h2><span class="step-badge">6</span> 阅读评价报告</h2>
+  <div id="ai-report"></div>
+
+  <div class="nav-row center">
+    <button class="btn-nav prev" onclick="goStep(5)">重新生成</button>
+    <button class="btn-outline btn-nav" onclick="resetAll()">🔄 重新开始</button>
+  </div>
+</div>
+
+<script>
+const API_BASE = 'http://localhost:8777';
+let currentSid = null;
+let currentUid = null;
+let progressSource = null;
+let aiEventSource = null;
+let loginEventSource = null;
+let currentStyle = 'serious';
+
+// Incremental book loading state
+let booksMeta = [];
+let booksTotal = 0;
+let booksLoaded = 0;
+let booksData = {};
+let deletedBookIds = new Set();
+let filterBooks = [];
+
+function $(id) { return document.getElementById(id); }
+function show(id) { $(id).classList.remove('hidden'); }
+function hide(id) { $(id).classList.add('hidden'); }
+
+// ── Step Management ──
+function goStep(n) {
+  document.querySelectorAll('.step-panel').forEach(function(el) { el.classList.add('hidden'); });
+  show('step-' + n);
+
+  document.querySelectorAll('.step-item').forEach(function(el) {
+    var s = parseInt(el.dataset.step);
+    el.classList.remove('active', 'completed');
+    if (s === n) el.classList.add('active');
+    else if (s < n) el.classList.add('completed');
+  });
+
+  // Step-specific side effects
+  if (n === 2 && currentUid) {
+    // Already logged in, skip to step 3
+    goStep(3);
+    return;
+  }
+  if (n === 5) {
+    // Reset AI button when re-entering
+    $('ai-btn').disabled = false;
+    $('ai-btn').textContent = '🤖 生成 AI 评价报告';
+    hide('ai-status');
+  }
+}
+
+function resetAll() {
+  if (progressSource) progressSource.close();
+  if (aiEventSource) aiEventSource.close();
+  if (loginEventSource) loginEventSource.close();
+  currentSid = null;
+  currentUid = null;
+  progressSource = null;
+  aiEventSource = null;
+  loginEventSource = null;
+  booksMeta = [];
+  booksTotal = 0;
+  booksLoaded = 0;
+  booksData = {};
+  deletedBookIds = new Set();
+  filterBooks = [];
+
+  hide('qr-area');
+  hide('filter-area');
+  hide('extract-status');
+  hide('ai-status');
+  hide('step-6');
+
+  $('start-btn').disabled = false;
+  $('start-btn').textContent = '📱 扫码登录';
+  $('extract-btn').disabled = false;
+  $('extract-btn').textContent = '🚀 开始提取';
+  $('ai-btn').disabled = true;
+  $('ai-btn').textContent = '🤖 生成 AI 评价报告';
+  $('to-ai-btn').disabled = true;
+  $('ai-report').innerHTML = '';
+
+  goStep(1);
+}
+
+// ── Step 1: LLM Configuration ──
+
+// Auto-load config on page load
+document.addEventListener('DOMContentLoaded', function() {
+  loadLlmConfig();
+});
+
+$('test-btn').addEventListener('click', async function() {
+  var baseUrl = $('llm-base-url').value.trim() || 'https://api.openai.com/v1';
+  var model = $('llm-model').value.trim() || 'gpt-4o-mini';
+  var apiKey = $('llm-api-key').value.trim();
+
+  if (!apiKey) {
+    show('test-result');
+    $('test-result').className = 'test-result error';
+    $('test-result').textContent = '请先输入 API Key';
+    return;
+  }
+
+  this.disabled = true;
+  this.textContent = '⏳ 测试中...';
+  show('test-result');
+  $('test-result').className = 'test-result working';
+  $('test-result').textContent = '正在测试连接...';
+
+  try {
+    var res = await fetch(API_BASE + '/api/llm/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, model: model }),
+    });
+    var data = await res.json();
+    if (res.ok) {
+      $('test-result').className = 'test-result ok';
+      $('test-result').textContent = '✅ 连接成功！响应: ' + (data.response || 'OK');
+    } else {
+      $('test-result').className = 'test-result error';
+      $('test-result').textContent = '❌ ' + (data.detail || '连接失败');
+    }
+  } catch (e) {
+    $('test-result').className = 'test-result error';
+    $('test-result').textContent = '❌ 请求失败: ' + e.message;
+  } finally {
+    this.disabled = false;
+    this.textContent = '测试连接';
+  }
+});
+
+$('config-save-btn').addEventListener('click', async function() {
+  var config = {
+    base_url: $('llm-base-url').value.trim(),
+    model: $('llm-model').value.trim(),
+    api_key: $('llm-api-key').value.trim(),
+  };
+  if (config.api_key === '') {
+    alert('请先输入 API Key');
+    return;
+  }
+  if (config.base_url === '') config.base_url = 'https://api.openai.com/v1';
+  if (config.model === '') config.model = 'gpt-4o-mini';
+
+  try {
+    var uid = currentUid;
+    if (uid) {
+      await fetch(API_BASE + '/api/llm/config/' + uid, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+    }
+    // Store in localStorage too for pre-login config
+    localStorage.setItem('llm_config', JSON.stringify(config));
+    goStep(2);
+  } catch (e) {
+    alert('保存配置失败: ' + e.message);
+  }
+});
+
+async function loadLlmConfig() {
+  // Try server config first, then localStorage
+  var cfg = null;
+  if (currentUid) {
+    try {
+      var res = await fetch(API_BASE + '/api/llm/config/' + currentUid);
+      if (res.ok) cfg = await res.json();
+    } catch (e) {}
+  }
+  if (!cfg) {
+    try {
+      var stored = localStorage.getItem('llm_config');
+      if (stored) cfg = JSON.parse(stored);
+    } catch (e) {}
+  }
+  if (cfg) {
+    if (cfg.base_url) $('llm-base-url').value = cfg.base_url;
+    if (cfg.model) $('llm-model').value = cfg.model;
+    if (cfg.temperature !== undefined) $('llm-temp').value = cfg.temperature;
+  }
+}
+
+// ── Step 2: Login ──
+
+$('start-btn').addEventListener('click', async function() {
+  this.disabled = true;
+  this.textContent = '⏳ 启动浏览器...';
+
+  try {
+    var res = await fetch(API_BASE + '/api/browser/start', { method: 'POST' });
+    var data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '启动失败');
+    currentSid = data.sid;
+    show('qr-area');
+    $('qr-img').src = API_BASE + '/api/browser/qrcode/' + data.sid;
+    $('qr-img').onerror = function() {
+      $('login-status').innerHTML = '<span class="status-badge error">二维码加载失败</span>';
+    };
+    this.textContent = '二维码已生成';
+    pollBrowserLogin(data.sid);
+  } catch (e) {
+    this.textContent = '❌ ' + e.message;
+    this.disabled = false;
+  }
+});
+
+function pollBrowserLogin(sid) {
+  loginEventSource = new EventSource(API_BASE + '/api/browser/status/' + sid);
+
+  loginEventSource.onmessage = async function(event) {
+    var d = JSON.parse(event.data);
+
+    if (d.status === 'ok') {
+      loginEventSource.close();
+      $('login-status').innerHTML = '<span class="status-badge ok">✅ 登录成功！</span>';
+      $('start-btn').textContent = '✅ 已登录';
+      $('start-btn').disabled = true;
+
+      await transferCookies(d.cookies);
+
+    } else if (d.status === 'timeout') {
+      loginEventSource.close();
+      $('login-status').innerHTML = '<span class="status-badge error">⏰ 扫码超时，请重试</span>';
+      $('start-btn').disabled = false;
+      $('start-btn').textContent = '📱 重新扫码登录';
+
+    } else if (d.status === 'waiting' || d.status === 'starting') {
+      $('login-status').innerHTML = '<span class="status-badge waiting">等待手机扫码确认...</span>';
+
+    } else if (d.status === 'error') {
+      loginEventSource.close();
+      $('login-status').innerHTML = '<span class="status-badge error">❌ ' + (d.message || '') + '</span>';
+      $('start-btn').disabled = false;
+      $('start-btn').textContent = '📱 重新扫码登录';
+    }
+  };
+
+  loginEventSource.onerror = function() {
+    $('login-status').innerHTML = '<span class="status-badge error">⚠️ 连接断开</span>';
+  };
+}
+
+async function transferCookies(cookies) {
+  try {
+    var qr = await fetch(API_BASE + '/api/auth/qrcode', { method: 'POST' });
+    var qrData = await qr.json();
+    currentUid = qrData.uid;
+
+    await fetch(API_BASE + '/api/auth/cookies/' + qrData.uid, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cookies: cookies }),
+    });
+
+    // Save LLM config now that we have a uid
+    var stored = localStorage.getItem('llm_config');
+    if (stored) {
+      try {
+        var cfg = JSON.parse(stored);
+        await fetch(API_BASE + '/api/llm/config/' + currentUid, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cfg),
+        });
+      } catch (e) {}
+    }
+
+    // Also load any server-side config
+    await loadLlmConfig();
+    goStep(3);
+  } catch (e) {
+    $('login-status').innerHTML = '<span class="status-badge error">❌ 获取会话失败: ' + e.message + '</span>';
+  }
+}
+
+function formatDate(ts) {
+  return new Date(ts * 1000).toLocaleDateString();
+}
+function formatDateInput(ts) {
+  var d = new Date(ts * 1000);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+// ── Step 3: Extract & Filter ──
+
+$('extract-btn').addEventListener('click', async function() {
+  if (!currentUid) return;
+
+  if (progressSource) progressSource.close();
+  filterBooks = [];
+  hide('filter-area');
+  hide('data-section');
+  hide('extract-status');
+  hide('step-6');
+
+  this.disabled = true;
+  this.textContent = '⏳ 扫描中...';
+
+  deletedBookIds = new Set();
+  booksMeta = [];
+  booksTotal = 0;
+  booksLoaded = 0;
+  booksData = {};
+
+  show('extract-status');
+  $('progress-fill').style.width = '0%';
+  $('progress-text').textContent = '正在扫描书籍时间线...';
+
+  try {
+    var res = await fetch(API_BASE + '/api/data/extract/' + currentUid, { method: 'POST' });
+    if (!res.ok) {
+      var errData = await res.json();
+      throw new Error(errData.detail || res.statusText);
+    }
+  } catch (e) {
+    $('progress-text').textContent = '❌ ' + e.message;
+    this.disabled = false;
+    this.textContent = '🔄 重试';
+    return;
+  }
+
+  progressSource = new EventSource(API_BASE + '/api/data/progress/' + currentUid);
+
+  progressSource.onmessage = function(event) {
+    var d = JSON.parse(event.data);
+
+    if (d.status === 'timeline') {
+      $('progress-text').textContent = '✅ 扫描完成，请选择时间范围 (共 ' + d.books.length + ' 本书)';
+      showTimelineFilter(d.books);
+
+    } else if (d.status === 'filtering') {
+      $('progress-text').textContent = d.book_title || '请选择时间范围筛选书籍';
+
+    } else if (d.status === 'empty') {
+      progressSource.close();
+      $('progress-text').textContent = '⚠️ ' + (d.message || '所选时间段内没有阅读记录');
+      $('extract-btn').disabled = false;
+      $('extract-btn').textContent = '🔄 重新选择';
+
+    } else if (d.status === 'notebooks') {
+      booksMeta = d.books;
+      booksTotal = d.books.length;
+      booksData = {};
+      booksLoaded = 0;
+      // We'll render in step 4 instead, just update status
+      $('progress-text').textContent = '正在获取书籍详情... (' + d.books.length + ' 本)';
+
+    } else if (d.status === 'book_done') {
+      d.batch.forEach(function(book) {
+        var idx = book._index;
+        if (idx === undefined) return;
+        booksData[idx] = book;
+        if (!deletedBookIds.has(book.bookId)) {
+          booksLoaded++;
+        }
+      });
+      if (d.total > 0) {
+        var pct = Math.round((d.current / d.total) * 100);
+        $('progress-fill').style.width = pct + '%';
+      }
+      if (d.batch && d.batch.length) {
+        var last = d.batch[d.batch.length - 1];
+        $('progress-text').textContent = '[' + d.current + '/' + d.total + '] ' + (last.title || '');
+      }
+
+    } else if (d.status === 'complete') {
+      progressSource.close();
+      $('progress-fill').style.width = '100%';
+      $('progress-text').textContent = '✅ 完成！共 ' + d.bookCount + ' 本书';
+      $('extract-btn').textContent = '✅ 提取完成';
+
+      // Fetch result and go to step 4
+      fetch(API_BASE + '/api/data/result/' + currentUid).then(function(res) {
+        if (!res.ok) return;
+        res.json().then(function(data) {
+          $('raw-json').textContent = JSON.stringify(data, null, 2);
+          renderReviewStep(data);
+          goStep(4);
+        });
+      }).catch(function() {});
+
+    } else if (d.status === 'error') {
+      progressSource.close();
+      $('progress-text').textContent = '❌ ' + d.message;
+      $('extract-btn').disabled = false;
+      $('extract-btn').textContent = '🔄 重试';
+
+    } else if (d.status === 'working' && d.phase === 'notebooks') {
+      $('progress-text').textContent = '正在获取书籍详情... (' + d.total + ' 本)';
+    }
+  };
+
+  progressSource.onerror = function() {
+    $('progress-text').textContent = '⚠️ 连接中断';
+  };
+});
+
+// ── Timeline Filter UI ──
+
+function showTimelineFilter(books) {
+  filterBooks = books;
+  var container = $('filter-book-list');
+  container.innerHTML = books.map(function(b) {
+    return '<label class="filter-book-item checked" data-book-id="' + escapeHtml(b.bookId) + '">' +
+      '<input type="checkbox" checked data-book-id="' + escapeHtml(b.bookId) + '">' +
+      '<span class="filter-book-title">' + escapeHtml(b.title || '') + '</span>' +
+      '<span class="filter-book-time">' + formatDate(b.lastReadingTime) + '</span>' +
+      '</label>';
+  }).join('');
+
+  if (books.length) {
+    var minTs = books[books.length - 1].lastReadingTime;
+    var maxTs = books[0].lastReadingTime;
+    $('filter-start').value = formatDateInput(minTs);
+    $('filter-end').value = formatDateInput(maxTs);
+  }
+
+  var info = '共 ' + books.length + ' 本书，阅读时间范围：' +
+    formatDate(books[books.length - 1].lastReadingTime) + ' ~ ' +
+    formatDate(books[0].lastReadingTime);
+  $('filter-info').textContent = info;
+  updateFilterSelectedCount();
+
+  show('filter-area');
+}
+
+function updateFilterSelectedCount() {
+  var checked = document.querySelectorAll('#filter-book-list input[type=checkbox]:checked').length;
+  var total = document.querySelectorAll('#filter-book-list input[type=checkbox]').length;
+  $('filter-selected-count').textContent = '已选 ' + checked + '/' + total + ' 本';
+}
+
+$('filter-book-list').addEventListener('change', function(e) {
+  if (e.target.type === 'checkbox') {
+    var label = e.target.closest('.filter-book-item');
+    if (label) {
+      label.classList.toggle('checked', e.target.checked);
+      label.classList.toggle('unchecked', !e.target.checked);
+    }
+    updateFilterSelectedCount();
+  }
+});
+
+$('filter-select-all').addEventListener('change', function() {
+  var checked = this.checked;
+  document.querySelectorAll('#filter-book-list input[type=checkbox]').forEach(function(cb) {
+    cb.checked = checked;
+    var label = cb.closest('.filter-book-item');
+    if (label) {
+      label.classList.toggle('checked', checked);
+      label.classList.toggle('unchecked', !checked);
+    }
+  });
+  updateFilterSelectedCount();
+});
+
+$('filter-confirm-btn').addEventListener('click', async function() {
+  var startVal = $('filter-start').value;
+  var endVal = $('filter-end').value;
+  if (!startVal || !endVal) {
+    alert('请选择起始和结束日期');
+    return;
+  }
+
+  var startDate = new Date(startVal).getTime() / 1000;
+  var endDate = new Date(endVal + 'T23:59:59').getTime() / 1000;
+
+  if (startDate >= endDate) {
+    alert('起始日期必须早于结束日期');
+    return;
+  }
+
+  var excludedBookIds = [];
+  document.querySelectorAll('#filter-book-list input[type=checkbox]').forEach(function(cb) {
+    if (!cb.checked) excludedBookIds.push(cb.dataset.bookId);
+  });
+
+  var remaining = filterBooks.filter(function(b) {
+    if (excludedBookIds.indexOf(b.bookId) !== -1) return false;
+    return b.lastReadingTime >= startDate && b.lastReadingTime <= endDate;
+  });
+
+  if (remaining.length === 0) {
+    alert('当前筛选条件下没有书籍，请调整日期范围或勾选书籍');
+    return;
+  }
+
+  this.disabled = true;
+  this.textContent = '⏳ 处理中...';
+  hide('filter-area');
+  $('progress-text').textContent = '正在导入所选书籍 (' + remaining.length + ' 本)...';
+
+  try {
+    var res = await fetch(API_BASE + '/api/data/set-filter/' + currentUid, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ startDate: startDate, endDate: endDate, excludedBookIds: excludedBookIds }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+  } catch (e) {
+    this.disabled = false;
+    this.textContent = '确认并开始导入';
+    alert('提交筛选条件失败: ' + e.message + '\n可能已超时，请重新点击提取。');
+    return;
+  }
+});
+
+// ── Step 4: Review & Delete Books ──
+
+function renderReviewStep(data) {
+  if (!data || !data.books) return;
+
+  var books = data.books;
+  var stats = data.stats;
+
+  // Stats
+  var statsEl = $('stats-summary');
+  if (stats) {
+    var html = '<div class="stats-grid">' +
+      '<div class="stat-box"><div class="num">' + stats.totalBooks + '</div><div class="label">有笔记的书籍</div></div>' +
+      '<div class="stat-box"><div class="num">' + stats.totalBookmarks + '</div><div class="label">划线条数</div></div>' +
+      '<div class="stat-box"><div class="num">' + stats.totalReviews + '</div><div class="label">想法条数</div></div>' +
+      '<div class="stat-box"><div class="num">' + (stats.totalBookReviews || 0) + '</div><div class="label">书评条数</div></div>' +
+      '</div>';
+
+    if (stats.topCategories && stats.topCategories.length) {
+      html += '<div class="mt-8"><h3 style="font-size:14px;margin-bottom:6px;">📂 分类分布</h3>';
+      stats.topCategories.forEach(function(c) {
+        html += '<span style="display:inline-block;background:#e8f5e9;border-radius:12px;padding:2px 10px;margin:2px;font-size:13px;">' + c[0] + ' (' + c[1] + ')</span>';
+      });
+      html += '</div>';
+    }
+    statsEl.innerHTML = html;
+  }
+
+  // Book list
+  var el = $('books-container');
+  if (!books.length) {
+    el.innerHTML = '<p>没有找到有笔记的书籍</p>';
+    $('to-ai-btn').disabled = false;
+    return;
+  }
+
+  var listHtml = '<p style="font-size:14px;color:#666;margin-bottom:8px;">共 ' + books.length + ' 本书（点击展开详情，可删除不想评价的书籍）：</p>';
+  books.forEach(function(b, i) {
+    var bid = b.bookId || '';
+    var cats = b.category ? b.category.replace(/[\[\]"]/g, '') : '-';
+    var parts = ['划线: ' + (b.totalBookmarks ?? 0) + ' 条', '想法: ' + (b.totalReviews ?? 0) + ' 条'];
+    if (b.totalBookReviews) parts.push('书评: ' + b.totalBookReviews + ' 条');
+
+    listHtml += '<div class="book-card" id="review-card-' + i + '" data-book-id="' + escapeHtml(bid) + '"><details><summary>' + escapeHtml(b.title || '无标题') + '</summary>' +
+      '<div class="meta">作者: ' + escapeHtml(b.author || '-') + ' ｜ 分类: ' + escapeHtml(cats) + ' ｜ 评分: ' + (b.rating ? b.rating.toFixed(1) : '-') + '</div>' +
+      '<div class="meta">' + parts.join(' ｜ ') + '</div>';
+
+    if (b.intro) {
+      var fullIntro = b.intro;
+      var introShort = fullIntro.substring(0, 100);
+      listHtml += '<div class="meta">简介: ';
+      if (fullIntro.length > 100) {
+        listHtml += '<span class="intro-short" data-bi="' + i + '">' + escapeHtml(introShort) + '</span>' +
+          '<span class="intro-full" data-bi="' + i + '" style="display:none">' + escapeHtml(fullIntro) + '</span> ' +
+          '<button class="toggle-intro btn-link" data-bi="' + i + '">展开</button>';
+      } else {
+        listHtml += escapeHtml(fullIntro);
+      }
+      listHtml += '</div>';
+    }
+
+    if (b.bookmarks && b.bookmarks.length) {
+      listHtml += '<details style="margin:6px 0 0 16px;"><summary>📝 划线 (' + b.bookmarks.length + ')</summary>';
+      var showBm = Math.min(b.bookmarks.length, 5);
+      for (var j = 0; j < showBm; j++) {
+        var m = b.bookmarks[j];
+        listHtml += '<div style="padding:4px 8px;margin:4px 0;background:#f9f9f9;border-left:3px solid #07c160;font-size:13px;">' +
+          '<div>' + escapeHtml(m.markText || '') + '</div>' +
+          '<div style="font-size:11px;color:#999;margin-top:2px;">' + escapeHtml(m.chapterTitle || '-') + ' ｜ ' + (m.createTime ? new Date(m.createTime * 1000).toLocaleDateString() : '') + '</div></div>';
+      }
+      if (b.bookmarks.length > 5) {
+        listHtml += '<div class="bm-more" data-bi="' + i + '" style="display:none">';
+        for (var j = 5; j < b.bookmarks.length; j++) {
+          var m = b.bookmarks[j];
+          listHtml += '<div style="padding:4px 8px;margin:4px 0;background:#f9f9f9;border-left:3px solid #07c160;font-size:13px;">' +
+            '<div>' + escapeHtml(m.markText || '') + '</div>' +
+            '<div style="font-size:11px;color:#999;margin-top:2px;">' + escapeHtml(m.chapterTitle || '-') + ' ｜ ' + (m.createTime ? new Date(m.createTime * 1000).toLocaleDateString() : '') + '</div></div>';
+        }
+        listHtml += '</div>';
+        listHtml += '<button class="toggle-bm btn-link" data-bi="' + i + '">展开全部 ' + b.bookmarks.length + ' 条</button>';
+      }
+      listHtml += '</details>';
+    }
+
+    if (b.reviews && b.reviews.length) {
+      listHtml += '<details style="margin:6px 0 0 16px;"><summary>💬 想法 (' + b.reviews.length + ')</summary>';
+      var showRv = Math.min(b.reviews.length, 5);
+      for (var j = 0; j < showRv; j++) {
+        var r = b.reviews[j];
+        listHtml += '<div style="padding:4px 8px;margin:4px 0;background:#f0f4ff;border-left:3px solid #2979ff;font-size:13px;">' +
+          (r.abstract ? '<div style="color:#555;margin-bottom:4px;font-style:italic;">「' + escapeHtml(r.abstract) + '」</div>' : '') +
+          (r.content ? '<div>' + escapeHtml(r.content) + '</div>' : '') +
+          '<div style="font-size:11px;color:#999;margin-top:2px;">' + escapeHtml(r.chapterTitle || '-') + ' ｜ ' + (r.createTime ? new Date(r.createTime * 1000).toLocaleDateString() : '') + '</div></div>';
+      }
+      if (b.reviews.length > 5) {
+        listHtml += '<div class="rv-more" data-bi="' + i + '" style="display:none">';
+        for (var j = 5; j < b.reviews.length; j++) {
+          var r = b.reviews[j];
+          listHtml += '<div style="padding:4px 8px;margin:4px 0;background:#f0f4ff;border-left:3px solid #2979ff;font-size:13px;">' +
+            (r.abstract ? '<div style="color:#555;margin-bottom:4px;font-style:italic;">「' + escapeHtml(r.abstract) + '」</div>' : '') +
+            (r.content ? '<div>' + escapeHtml(r.content) + '</div>' : '') +
+            '<div style="font-size:11px;color:#999;margin-top:2px;">' + escapeHtml(r.chapterTitle || '-') + ' ｜ ' + (r.createTime ? new Date(r.createTime * 1000).toLocaleDateString() : '') + '</div></div>';
+        }
+        listHtml += '</div>';
+        listHtml += '<button class="toggle-rv btn-link" data-bi="' + i + '">展开全部 ' + b.reviews.length + ' 条</button>';
+      }
+      listHtml += '</details>';
+    }
+
+    if (b.bookReviews && b.bookReviews.length) {
+      listHtml += '<details style="margin:6px 0 0 16px;"><summary>📖 书评 (' + b.bookReviews.length + ')</summary>';
+      var showBr = Math.min(b.bookReviews.length, 5);
+      for (var j = 0; j < showBr; j++) {
+        var r = b.bookReviews[j];
+        listHtml += '<div style="padding:4px 8px;margin:4px 0;background:#fef3e2;border-left:3px solid #f59e0b;font-size:13px;">' +
+          '<div>' + escapeHtml(r.content || '') + '</div>' +
+          '<div style="font-size:11px;color:#999;margin-top:2px;">' + (r.createTime ? new Date(r.createTime * 1000).toLocaleDateString() : '') + '</div></div>';
+      }
+      if (b.bookReviews.length > 5) {
+        listHtml += '<div class="br-more" data-bi="' + i + '" style="display:none">';
+        for (var j = 5; j < b.bookReviews.length; j++) {
+          var r = b.bookReviews[j];
+          listHtml += '<div style="padding:4px 8px;margin:4px 0;background:#fef3e2;border-left:3px solid #f59e0b;font-size:13px;">' +
+            '<div>' + escapeHtml(r.content || '') + '</div>' +
+            '<div style="font-size:11px;color:#999;margin-top:2px;">' + (r.createTime ? new Date(r.createTime * 1000).toLocaleDateString() : '') + '</div></div>';
+        }
+        listHtml += '</div>';
+        listHtml += '<button class="toggle-br btn-link" data-bi="' + i + '">展开全部 ' + b.bookReviews.length + ' 条</button>';
+      }
+      listHtml += '</details>';
+    }
+
+    listHtml += '<div style="margin-top:8px;">' +
+      '<span class="deleted-badge" style="display:none">✅ 已删除</span>' +
+      '<button class="delete-btn" data-book-id="' + escapeHtml(bid) + '">🗑️ 删除此书</button></div>' +
+      '</details></div>';
+  });
+  el.innerHTML = listHtml;
+
+  // Enable proceed button
+  updateProceedButton();
+}
+
+function updateProceedButton() {
+  var visibleBooks = document.querySelectorAll('#books-container .book-card:not(.deleted)').length;
+  $('to-ai-btn').disabled = (visibleBooks === 0);
+  if (visibleBooks === 0) {
+    $('to-ai-btn').textContent = '⚠️ 请至少保留一本书';
+  } else {
+    $('to-ai-btn').textContent = '继续到 AI 评价 → (' + visibleBooks + ' 本)';
+  }
+}
+
+// Event delegation for book cards (delete, toggle expand)
+$('books-container').addEventListener('click', function(e) {
+  var btn = e.target.closest('.toggle-intro, .toggle-bm, .toggle-rv, .toggle-br, .delete-btn');
+  if (!btn) return;
+
+  if (btn.classList.contains('delete-btn')) {
+    var bookId = btn.dataset.bookId;
+    if (!bookId || !currentUid) return;
+    var card = btn.closest('.book-card');
+    if (card && card.classList.contains('deleted')) return;
+
+    fetch(API_BASE + '/api/data/delete-book/' + currentUid, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookId: bookId }),
+    }).then(function() {
+      deletedBookIds.add(bookId);
+      if (card) {
+        card.classList.add('deleted');
+        var badge = card.querySelector('.deleted-badge');
+        if (badge) badge.style.display = 'inline-block';
+      }
+      $('to-ai-btn').disabled = false;
+      updateProceedButton();
+    }).catch(function(err) {
+      console.error('delete failed', err);
+    });
+    return;
+  }
+
+  var bi = btn.dataset.bi;
+
+  if (btn.classList.contains('toggle-intro')) {
+    var shortEl = document.querySelector('.intro-short[data-bi="' + bi + '"]');
+    var fullEl = document.querySelector('.intro-full[data-bi="' + bi + '"]');
+    if (!shortEl || !fullEl) return;
+    var isExpanded = fullEl.style.display !== 'none';
+    shortEl.style.display = isExpanded ? '' : 'none';
+    fullEl.style.display = isExpanded ? 'none' : '';
+    btn.textContent = isExpanded ? '展开' : '收起';
+    return;
+  }
+
+  var moreClass = btn.classList.contains('toggle-bm') ? 'bm-more'
+    : btn.classList.contains('toggle-rv') ? 'rv-more' : 'br-more';
+  var moreEl = document.querySelector('.' + moreClass + '[data-bi="' + bi + '"]');
+  if (!moreEl) return;
+  var isVisible = moreEl.style.display !== 'none';
+  moreEl.style.display = isVisible ? 'none' : '';
+  btn.textContent = isVisible
+    ? btn.textContent.replace(/^收起/, '展开全部')
+    : btn.textContent.replace(/^展开全部/, '收起');
+});
+
+// Navigate to AI step
+$('to-ai-btn').addEventListener('click', function() {
+  if (this.disabled) return;
+  $('ai-btn').disabled = false;
+  goStep(5);
+});
+
+// ── Step 5: AI Evaluation ──
+
+// Style toggle
+document.querySelectorAll('.style-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.style-btn').forEach(function(b) { b.classList.remove('active'); });
+    this.classList.add('active');
+    currentStyle = this.dataset.style;
+
+    if (currentUid) {
+      fetch(API_BASE + '/api/analysis/style/' + currentUid, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ style: currentStyle }),
+      }).catch(function() {});
+    }
+  });
+});
+
+$('ai-btn').addEventListener('click', async function() {
+  if (!currentUid) return;
+  this.disabled = true;
+  this.textContent = '⏳ AI 分析中...';
+
+  show('ai-status');
+  $('ai-progress-fill').style.width = '0%';
+  $('ai-progress-text').textContent = '正在启动分析...';
+
+  try {
+    var res = await fetch(API_BASE + '/api/analysis/start/' + currentUid, { method: 'POST' });
+    if (!res.ok) {
+      var errData = await res.json();
+      throw new Error(errData.detail || res.statusText);
+    }
+  } catch (e) {
+    $('ai-progress-text').textContent = '❌ ' + e.message;
+    this.disabled = false;
+    this.textContent = '🔄 重试';
+    return;
+  }
+
+  aiEventSource = new EventSource(API_BASE + '/api/analysis/progress/' + currentUid);
+
+  aiEventSource.onmessage = function(event) {
+    var d = JSON.parse(event.data);
+
+    if (d.status === 'done') {
+      aiEventSource.close();
+      $('ai-progress-fill').style.width = '100%';
+      $('ai-progress-text').textContent = '✅ AI 评价完成！';
+      $('ai-btn').textContent = '✅ 评价完成';
+      renderAiReport(d.report);
+      goStep(6);
+
+    } else if (d.status === 'error') {
+      aiEventSource.close();
+      $('ai-progress-text').textContent = '❌ ' + d.message;
+      $('ai-btn').disabled = false;
+      $('ai-btn').textContent = '🔄 重试';
+
+    } else if (d.status === 'working') {
+      $('ai-progress-text').textContent = d.message || '分析中...';
+      $('ai-progress-fill').style.width = '60%';
+    }
+  };
+
+  aiEventSource.onerror = function() {
+    $('ai-progress-text').textContent = '⚠️ 连接中断';
+  };
+});
+
+// ── Step 6: Report ──
+
+function renderAiReport(report) {
+  if (!report || report.error) {
+    $('ai-report').innerHTML = '<p style="color:#ef4444;">⚠️ AI 返回解析失败，请重试。</p>';
+    return;
+  }
+
+  var score = report.overall_score || 0;
+  var scoreClass = score >= 7 ? 'high' : (score >= 4 ? 'mid' : 'low');
+
+  var html = '';
+
+  // Header: score + one-liner
+  html += '<div class="report-header">';
+  html += '<div class="score-circle ' + scoreClass + '">' + score + '</div>';
+  html += '<div style="font-size:12px;color:#888;margin-top:4px;">综合评分</div>';
+  html += '</div>';
+
+  if (report.one_liner) {
+    html += '<div class="one-liner">💬 ' + escapeHtml(report.one_liner) + '</div>';
+  }
+
+  if (report.summary) {
+    html += '<div class="summary-text">' + escapeHtml(report.summary).replace(/\n/g, '<br>') + '</div>';
+  }
+
+  // Dimensions
+  if (report.dimensions && report.dimensions.length) {
+    html += '<div class="dim-section"><h3>📊 维度评分</h3>';
+    report.dimensions.forEach(function(d) {
+      var ds = d.score || 0;
+      var dc = ds >= 7 ? 'high' : (ds >= 4 ? 'mid' : 'low');
+      var pct = Math.round(ds / 10 * 100);
+      html += '<div class="dim-card">';
+      html += '<div class="dim-header"><span class="dim-name">' + escapeHtml(d.name) + '</span><span class="dim-score">' + ds + '/10</span></div>';
+      html += '<div class="dim-bar"><div class="fill ' + dc + '" style="width:' + pct + '%"></div></div>';
+      html += '<div class="dim-comment">' + escapeHtml(d.comment || '') + '</div>';
+      if (d.evidence) {
+        html += '<div class="dim-evidence">📌 ' + escapeHtml(d.evidence) + '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  // Strengths & Weaknesses
+  if (report.strengths && report.strengths.length) {
+    html += '<h3>✅ 优点</h3><div class="tag-list">';
+    report.strengths.forEach(function(s) { html += '<span class="tag green">' + escapeHtml(s) + '</span>'; });
+    html += '</div>';
+  }
+  if (report.weaknesses && report.weaknesses.length) {
+    html += '<h3>⚠️ 不足</h3><div class="tag-list">';
+    report.weaknesses.forEach(function(w) { html += '<span class="tag red">' + escapeHtml(w) + '</span>'; });
+    html += '</div>';
+  }
+
+  // Book picks
+  var picks = report.book_picks;
+  if (picks) {
+    html += '<h3>📚 书籍推荐</h3>';
+    if (picks.top && picks.top.length) {
+      picks.top.forEach(function(p) {
+        html += '<div class="pick-card top"><span class="pick-title">👍 ' + escapeHtml(p.title) + '</span><div class="pick-reason">' + escapeHtml(p.reason || '') + '</div></div>';
+      });
+    }
+    if (picks.flop && picks.flop.length) {
+      picks.flop.forEach(function(p) {
+        html += '<div class="pick-card flop"><span class="pick-title">👎 ' + escapeHtml(p.title) + '</span><div class="pick-reason">' + escapeHtml(p.reason || '') + '</div></div>';
+      });
+    }
+  }
+
+  // Recommendations
+  if (report.recommendations && report.recommendations.length) {
+    html += '<h3>💡 阅读建议</h3><ul class="reco-list">';
+    report.recommendations.forEach(function(r) { html += '<li>' + escapeHtml(r) + '</li>'; });
+    html += '</ul>';
+  }
+
+  html += '<div class="report-footer">🤖 AI 生成内容，仅供参考</div>';
+
+  $('ai-report').innerHTML = html;
+}
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  var div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Enable going to AI step from step 3 if data already exists
+(function checkExistingData() {
+  if (currentUid) {
+    fetch(API_BASE + '/api/data/result/' + currentUid).then(function(res) {
+      if (res.ok) return res.json();
+      throw new Error('no data');
+    }).then(function(data) {
+      $('raw-json').textContent = JSON.stringify(data, null, 2);
+      renderReviewStep(data);
+      $('extract-btn').textContent = '✅ 重新提取';
+      $('extract-btn').disabled = false;
+      // User can navigate from step 3 back to step 4
+    }).catch(function() {});
+  }
+})();
+</script>
+
+</body>
+</html>
