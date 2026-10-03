@@ -27,3 +27,6 @@ node_modules/
 
 # 本机 agent 的工作记忆，不属于项目源码
 .workbuddy/
+
+# 发布平台写入的应用标记文件，与代码无关
+.wbapp_*.genie
