@@ -120,7 +120,11 @@ BOOKMARKLIST_URLS = [
     "https://i.weread.qq.com/book/bookmarklist?bookId={book_id}&synckey=0",
 ]
 
+# 用户在一本书上可以写很多条想法，评分那一条未必落在默认的第一页里。
+# 所以先要 count=100，拿不到再退回默认分页的旧写法。
 REVIEW_LIST_URLS = [
+    "https://weread.qq.com/web/review/list"
+    "?bookId={book_id}&listType=11&mine=1&synckey=0&count=100",
     "https://weread.qq.com/web/review/list?bookId={book_id}&listType=11&mine=1&synckey=0",
     "https://weread.qq.com/api/review/list?bookId={book_id}&listType=11&mine=1&synckey=0",
     "https://i.weread.qq.com/review/list?bookId={book_id}&listType=11&mine=1&synckey=0",

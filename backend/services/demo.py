@@ -61,7 +61,7 @@ _BOOKS = [
     {
         "title": "寂静的春天", "author": "蕾切尔·卡森", "category": "科普",
         "rating": 8.7, "intro": "以DDT为代表的杀虫剂如何进入生态链并最终回到人体。",
-        "bm": 12, "rv": 2, "br": 1,
+        "bm": 12, "rv": 2, "br": 1, "my_rating": 5,
         "bm_texts": ["人类正在失去预见的能力，因为对自然的征服欲太强。"],
         "rv_texts": ["现代环保运动的起点，文笔比很多小说还好。"],
         "br_text": ["科普写作的标杆，情绪克制但证据锋利。"],
@@ -69,7 +69,7 @@ _BOOKS = [
     {
         "title": "技术的本质", "author": "布莱恩·阿瑟", "category": "科技",
         "rating": 8.2, "intro": "技术是被捕获并加以利用的现象的集合。",
-        "bm": 9, "rv": 1, "br": 0,
+        "bm": 9, "rv": 1, "br": 0, "my_rating": 2,
         "bm_texts": ["技术是对现象的编程。"],
         "rv_texts": ["概念密度很高，适合慢慢读。"],
         "br_text": [],
@@ -86,6 +86,23 @@ _BOOKS = [
         "intro": "",
         "bm": 0, "rv": 0, "br": 0,
         "bm_texts": [], "rv_texts": [], "br_text": [],
+    },
+    # ── 本地上传文件：书名就是文件名，没有任何出版物元数据 ──
+    {
+        "title": "2023年度技术规划.pdf", "author": "", "category": "",
+        "rating": 0.0, "intro": "", "local": True,
+        "bm": 6, "rv": 3, "br": 0, "my_rating": None,
+        "bm_texts": ["今年把可观测性放在第一位，故障定位时间要压到 5 分钟以内。"],
+        "rv_texts": ["这份规划后来兑现了七成，剩下三成卡在人力上。"],
+        "br_text": [],
+    },
+    {
+        "title": "扫描件_城市研究笔记.epub", "author": "", "category": "",
+        "rating": 0.0, "intro": "", "local": True,
+        "bm": 4, "rv": 1, "br": 0, "my_rating": None,
+        "bm_texts": ["通勤半径决定了一个人能接触到的就业机会总量。"],
+        "rv_texts": ["朋友的内部资料，数据口径粗糙但视角很新。"],
+        "br_text": [],
     },
 ]
 
@@ -145,6 +162,8 @@ def build_demo_data() -> dict:
             for text in spec["br_text"]
         ]
 
+        my_rating = spec.get("my_rating")
+        is_local = bool(spec.get("local"))
         books.append({
             "bookId": bid,
             "title": spec["title"],
@@ -153,6 +172,14 @@ def build_demo_data() -> dict:
             "category": spec["category"],
             "rating": spec["rating"],
             "intro": spec["intro"],
+            "myRating": my_rating,
+            "myRatingSource": "book_review" if my_rating is not None else "",
+            "hasMyRating": my_rating is not None,
+            "source": "local" if is_local else "weread",
+            "sourceSignals": (
+                ["书名带电子书扩展名", "出版物元数据字段全空"] if is_local
+                else ["ISBN", "社区评分", "分类"]
+            ),
             "totalBookmarks": len(bookmarks),
             "totalReviews": len(reviews),
             "totalBookReviews": len(book_reviews),

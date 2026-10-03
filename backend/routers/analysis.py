@@ -73,11 +73,13 @@ async def estimate_payload(uid: str):
             "bookmarks": cf.get("keepBookmarks", True),
             "reviews": cf.get("keepReviews", True),
             "bookReviews": cf.get("keepBookReviews", True),
+            "ratedOnly": cf.get("ratedOnly", False),
         },
         "counts": {
             "bookmarks": data["stats"]["totalBookmarks"],
             "reviews": data["stats"]["totalReviews"],
             "bookReviews": data["stats"]["totalBookReviews"],
+            "ratedBooks": data["stats"].get("ratedBooks", 0),
         },
         "note": "CJK 按 1 token/字、其余按 4 字符/token 粗估，不确定度约 ±30%",
     }

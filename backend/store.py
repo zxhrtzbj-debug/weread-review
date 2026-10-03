@@ -22,7 +22,7 @@ import uuid
 from collections import Counter
 from copy import deepcopy
 
-from config import DEFAULT_CONTENT_FILTER, MAX_SESSIONS, SESSION_TTL
+from config import DEFAULT_CONTENT_FILTER, LOCAL_PICK_SLOTS, MAX_SESSIONS, SESSION_TTL
 from services.llm import LLMConfig
 
 
@@ -67,6 +67,13 @@ class SessionStore:
             # 审核阶段
             "deleted_book_ids": [],
             "content_filter": _empty_content_filter(),
+            # 本地上传文件的自选结果：{bookId: {"slot": "印象最深", "note": "用户写的感悟"}}
+            # 这些文件没有书名/分类/评分，默认不进书单，只有被选中才参与评价。
+            "local_picks": {},
+            # 来源判定的人工改判：{bookId: "weread" | "local"}。
+            # 自动判定靠元数据缺失度，冷门书偶尔会被误判成本地文件；
+            # 没有这个出口的话，那本书就只能从书单里消失且没法救回来。
+            "source_overrides": {},
             # 分析阶段
             "llm_config": LLMConfig().model_dump(),
             "search_config": {
@@ -140,17 +147,84 @@ class SessionStore:
         return set(session.get("deleted_book_ids", []))
 
     def active_data(self, session: dict) -> dict | None:
-        """剔除已删除书籍 + 按内容筛选裁剪字段，并重算统计。"""
+        """剔除已删除书籍 + 按内容筛选裁剪字段，并重算统计。
+
+        本地上传文件的处理在这里：它们默认不进书单（书名常是文件名，
+        会让 LLM 对着一串 PDF 名字编造品味），只有在 local_picks 里被
+        用户归入某个分类的才进来，并带上用户自己写的介绍感悟。
+        全部本地文件仍然一并返回（挂在 localFiles 上）供前端选择面板用。
+        """
         data = session.get("data")
         if not data:
             return None
 
         deleted = self.deleted_ids(session)
-        books = [b for b in data.get("books", []) if b.get("bookId") not in deleted]
+        kept = [b for b in data.get("books", []) if b.get("bookId") not in deleted]
+        overrides = session.get("source_overrides") or {}
+
+        all_local = [b for b in kept if _is_local(b, overrides)]
+        picks = session.get("local_picks") or {}
+
+        books = []
+        for b in kept:
+            if _is_local(b, overrides):
+                pick = picks.get(b.get("bookId"))
+                if not pick:
+                    continue  # 未被用户选中 → 不进书单
+                b = {**b, "userSlot": pick.get("slot", ""),
+                     "userNote": (pick.get("note") or "").strip()}
+            books.append(b)
 
         cf = {**_empty_content_filter(), **(session.get("content_filter") or {})}
         books = [_apply_content_filter(b, cf) for b in books]
-        return {"books": books, "stats": _recompute_stats(books)}
+
+        # 本地文件连书名都不可靠，让它们被联网补检只会浪费检索配额
+        searchable = [b for b in books if not _is_local(b, overrides)]
+        return {
+            "books": books,
+            "stats": _recompute_stats(books, local_total=len(all_local)),
+            "localFiles": [_local_file_view(b) for b in all_local],
+            "_searchable_book_ids": [b.get("bookId") for b in searchable],
+        }
+
+    # ── 来源判定的手工改判 ───────────────────────────
+    def set_source_override(self, session: dict, book_id: str, source: str | None) -> dict:
+        """人工改判一本书是上架书籍还是本地文件。source=None 表示撤销改判。
+
+        自动判定按"出版物元数据缺失度"打分，冷门书偶尔会被误判成本地文件；
+        这个出口让那本书能被放回书单。
+        """
+        overrides = dict(session.get("source_overrides") or {})
+        if source in ("weread", "local"):
+            overrides[str(book_id)] = source
+        else:
+            overrides.pop(str(book_id), None)
+        session["source_overrides"] = overrides
+        # 改判成上架书籍时，之前为它做的本地分类就作废了
+        if source == "weread":
+            picks = dict(session.get("local_picks") or {})
+            picks.pop(str(book_id), None)
+            session["local_picks"] = picks
+        return overrides
+
+    # ── 本地上传文件的自选分类 ───────────────────────
+    def set_local_picks(self, session: dict, picks: dict) -> dict:
+        """保存用户为本地文件做的分类选择。
+
+        picks: {bookId: {"slot": str, "note": str}}。同一个分类只保留最后一个
+        提交的书（一个分类选一本），note 留空或键缺失即清除该选择。
+        """
+        cleaned: dict[str, dict] = {}
+        for book_id, pick in (picks or {}).items():
+            if not isinstance(pick, dict):
+                continue
+            slot = (pick.get("slot") or "").strip()
+            note = (pick.get("note") or "").strip()
+            if not slot and not note:
+                continue
+            cleaned[str(book_id)] = {"slot": slot, "note": note}
+        session["local_picks"] = cleaned
+        return cleaned
 
     # ── 便捷读写 ──────────────────────────────────────
     def set_content_filter(self, session: dict, patch: dict) -> dict:
@@ -178,11 +252,41 @@ class SessionStore:
         return cfg
 
 
+def _is_local(book: dict, overrides: dict | None = None) -> bool:
+    """本地上传文件。人工改判优先于自动判定。
+
+    source 缺失时（旧数据/示例数据）一律按上架书籍处理，
+    免得一次后端升级把整份旧数据判成本地文件、书单直接清空。
+    """
+    bid = book.get("bookId")
+    if overrides and bid in overrides:
+        return overrides[bid] == "local"
+    return book.get("source") == "local"
+
+
+def _local_file_view(book: dict) -> dict:
+    """给前端选择面板用的精简视图。"""
+    return {
+        "bookId": book.get("bookId"),
+        "title": book.get("title") or "（无标题）",
+        "author": book.get("author") or "",
+        "sourceSignals": book.get("sourceSignals") or [],
+        "myRating": book.get("myRating"),
+        "totalBookmarks": book.get("totalBookmarks", 0),
+        "totalReviews": book.get("totalReviews", 0),
+        "totalBookReviews": book.get("totalBookReviews", 0),
+    }
+
+
 def _apply_content_filter(book: dict, cf: dict) -> dict:
     """按内容筛选裁剪单本书。返回副本，不动原数据。"""
     out = dict(book)
 
-    if cf.get("keepBookmarks"):
+    # 只保留"我打过分的书"的划线/想法：打分是一次明确的偏好表态，
+    # 没打分的书只保留书单行（书名/分类/社区评分），不再展开内容。
+    rated_only = bool(cf.get("ratedOnly")) and not out.get("hasMyRating")
+
+    if cf.get("keepBookmarks") and not rated_only:
         bms = list(out.get("bookmarks") or [])
         cap = cf.get("maxBookmarksPerBook") or 0
         if cap and len(bms) > cap:
@@ -191,7 +295,7 @@ def _apply_content_filter(book: dict, cf: dict) -> dict:
     else:
         out["bookmarks"] = []
 
-    if cf.get("keepReviews"):
+    if cf.get("keepReviews") and not rated_only:
         rvs = list(out.get("reviews") or [])
         cap = cf.get("maxReviewsPerBook") or 0
         if cap and len(rvs) > cap:
@@ -212,14 +316,20 @@ def _apply_content_filter(book: dict, cf: dict) -> dict:
     return out
 
 
-def _recompute_stats(books: list[dict]) -> dict:
+def _recompute_stats(books: list[dict], local_total: int = 0) -> dict:
     categories = Counter(b.get("category", "") for b in books if b.get("category"))
     authors = Counter(b.get("author", "") for b in books if b.get("author"))
+    rated = [b.get("myRating") for b in books if b.get("myRating") is not None]
     return {
         "totalBooks": len(books),
         "totalBookmarks": sum(b.get("totalBookmarks", 0) for b in books),
         "totalReviews": sum(b.get("totalReviews", 0) for b in books),
         "totalBookReviews": sum(b.get("totalBookReviews", 0) for b in books),
+        # 全部本地文件数（含未被选中的）—— 前端要显示"还有 N 本没归类"
+        "localFiles": local_total,
+        "localPicked": sum(1 for b in books if b.get("userSlot")),
+        "ratedBooks": len(rated),
+        "avgMyRating": round(sum(rated) / len(rated), 2) if rated else 0,
         "topCategories": categories.most_common(10),
         "topAuthors": authors.most_common(10),
     }

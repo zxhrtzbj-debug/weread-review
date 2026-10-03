@@ -53,19 +53,11 @@ jobs:
         with:
           node-version: "20"
 
-      # index.html 是单文件前端，JS 内嵌在 <script> 里。
-      # 之前批量替换 URL 时把括号吃掉过一次，这个检查就是防这类事故的。
-      - name: 校验内嵌 JS 可解析
-        run: |
-          node -e "
-          const fs = require('fs');
-          const html = fs.readFileSync('frontend/index.html', 'utf8');
-          const m = html.match(/<script[^>]*>([\s\S]*?)<\/script>/);
-          if (!m) { console.error('✗ 找不到 script 块'); process.exit(1); }
-          try { new Function(m[1]); }
-          catch (e) { console.error('✗ JS 语法错误: ' + e.message); process.exit(1); }
-          console.log('✓ JS 语法通过');
-          "
+      # 内嵌 JS 可解析 + 所有 $('id') 引用的节点真实存在。
+      # 后者专治"处理器第一行就抛 TypeError"：按钮点了没反应、前后端都不报错，
+      # 静态看代码完全看不出来（这个项目上线过一次）。
+      - name: 校验内嵌 JS 与 DOM id 引用
+        run: node frontend_static_check.js
 
       # apiUrl(path, tail) 的 tail 必须拼在 query 之前。
       # 写成 apiUrl(path) + uid 时，本地（无口令）完全正常，
@@ -74,6 +66,24 @@ jobs:
       # 所以把真实的 apiUrl 抠出来跑一遍。
       - name: 校验带口令时 URL 拼接正确
         run: node frontend_url_test.js
+
+  # 静态检查看不见"事件处理器第一行抛异常"这类问题 —— 按钮点了没反应、
+  # 前后端都不报错。唯一可靠的办法是拿 jsdom 真点一次。
+  frontend-dom:
+    name: 前端真实交互（jsdom）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 装 jsdom
+        run: npm i --no-save --no-audit --no-fund jsdom
+
+      - name: 跑 step-4 交互（本地文件面板 / 改判 / 内容筛选）
+        run: node archive/diagnose/jsdom_local_picks.js
 
   docker:
     name: Docker 镜像构建

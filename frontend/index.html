@@ -269,6 +269,51 @@ pre {
 .cf-estimate .saved { color: #07c160; font-weight: 600; }
 .cf-estimate.loading { background: #f1f3f5; color: #666; }
 
+/* ── 本地上传文件自选面板 (step 4) ── */
+.lf-box {
+  background: #fffaf0; border: 1px solid #ffe0b2; border-radius: 8px;
+  padding: 12px 14px; margin-bottom: 14px;
+}
+.lf-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.lf-title { font-size: 14px; font-weight: 600; color: #8a5a00; }
+.lf-count { font-size: 12px; color: #a1803a; }
+.lf-desc { font-size: 12px; color: #8a6d3b; line-height: 1.6; margin: 6px 0 10px; }
+.lf-empty { font-size: 13px; color: #999; padding: 6px 0; }
+.lf-row {
+  display: grid; grid-template-columns: 1fr 130px; gap: 10px;
+  padding: 10px; background: #fff; border: 1px solid #f2e3c8;
+  border-radius: 6px; margin-bottom: 8px;
+}
+.lf-row.filled { border-color: #07c160; background: #f6fffa; }
+.lf-name { font-size: 13px; font-weight: 500; word-break: break-all; }
+.lf-signals { font-size: 11px; color: #a1803a; margin-top: 3px; }
+.lf-counts { font-size: 11px; color: #999; margin-top: 2px; }
+.lf-row select, .lf-row textarea {
+  width: 100%; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px;
+  font-size: 13px; font-family: inherit;
+}
+.lf-row textarea { grid-column: 1 / -1; min-height: 58px; resize: vertical; }
+.lf-unsplit {
+  margin-top: 6px; background: none; border: 1px solid #e0e0e0; color: #8a5a00;
+  font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; width: 100%;
+}
+.lf-unsplit:hover { border-color: #07c160; color: #07c160; background: #f6fffa; }
+.lf-row select:focus, .lf-row textarea:focus { border-color: #07c160; outline: none; }
+.lf-slot-label { font-size: 12px; color: #666; display: block; margin-bottom: 2px; }
+.lf-actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+.lf-actions .lf-hint { font-size: 12px; color: #8a6d3b; }
+.lf-new-slot { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.lf-new-slot input {
+  padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; width: 160px;
+}
+
+/* 书卡上的「我的评价」星标 */
+.my-rating { color: #f59e0b; font-size: 12px; margin-left: 6px; letter-spacing: 1px; }
+.local-badge {
+  display: inline-block; font-size: 11px; background: #fff3cd; color: #856404;
+  border-radius: 10px; padding: 1px 8px; margin-left: 6px;
+}
+
 /* ── Search panel (step 5) ── */
 .search-panel {
   background: #f8f9fa; border: 1px solid #eee; border-radius: 8px;
@@ -552,6 +597,7 @@ pre {
       <button class="cf-preset" data-preset="bookReviewsOnly">🔥 只保留书评（最省 token）</button>
       <button class="cf-preset" data-preset="reviewsOnly">只保留想法/笔记</button>
       <button class="cf-preset" data-preset="noBookmarks">去掉划线，保留想法 + 书评</button>
+      <button class="cf-preset" data-preset="ratedOnly">⭐ 只展开我打过分的书</button>
     </div>
     <div class="cf-checks">
       <label><input type="checkbox" id="cf-bookmarks" checked> 划线 <span class="cf-count" id="cf-bm-count"></span></label>
@@ -559,8 +605,35 @@ pre {
       <label><input type="checkbox" id="cf-bookreviews" checked> 书评 <span class="cf-count" id="cf-br-count"></span></label>
       <label>划线上限/本 <input type="number" id="cf-bm-cap" min="0" placeholder="不限"></label>
       <label>想法上限/本 <input type="number" id="cf-rv-cap" min="0" placeholder="不限"></label>
+      <label title="打分是一次明确的偏好表态：没打分的书只保留书单行（书名/分类/评分），不再展开划线与想法">
+        <input type="checkbox" id="cf-rated-only"> ⭐ 只保留我打过分的书的划线/想法
+        <span class="cf-count" id="cf-rated-count"></span>
+      </label>
     </div>
     <div class="cf-estimate" id="cf-estimate">计算中…</div>
+  </div>
+
+  <!-- ── 本地上传文件：书名常是文件名，默认不进书单，按需选入 ── -->
+  <div class="lf-box hidden" id="local-files-box">
+    <div class="lf-head">
+      <span class="lf-title">📁 本地上传文件</span>
+      <span class="lf-count" id="lf-count"></span>
+    </div>
+    <p class="lf-desc">
+      这些是你在微信读书里<b>自己上传的文件</b>（书名往往就是文件名），
+      它们没有分类、没有站内评分，默认<b>不进入书单</b>——否则 AI 会对着一串 PDF 名字编造阅读品味。
+      如果你想让其中几本参与评价，给它们挑一个分类、写一段介绍感悟；
+      这段文字会放在该书的划线与想法<b>前面</b>，作为你本人的态度说明。
+    </p>
+    <div id="lf-rows"></div>
+    <div class="lf-new-slot">
+      <input type="text" id="lf-new-slot-name" placeholder="新增分类，如「通勤读物」">
+      <button class="btn-sm" id="lf-add-slot-btn" style="background:#8a5a00;">＋ 新增分类</button>
+    </div>
+    <div class="lf-actions">
+      <button class="btn-sm" id="lf-save-btn">保存选择</button>
+      <span class="lf-hint" id="lf-hint"></span>
+    </div>
   </div>
 
   <div id="stats-summary"></div>
@@ -769,6 +842,10 @@ function resetAll() {
   hide('step-6');
   hide('preflight-box');
   hide('progress-sub');
+  hide('local-files-box');
+  localFiles = [];
+  localSlots = [];
+  localPicks = {};
 
   $('start-btn').disabled = false;
   $('start-btn').textContent = '📱 扫码登录';
@@ -1455,6 +1532,11 @@ const CF_PRESETS = {
     keepBookmarks: false, keepReviews: true, keepBookReviews: true,
     maxBookmarksPerBook: 0, maxReviewsPerBook: 0,
   },
+  // 打分是一次明确的偏好表态：用它当中层筛选，比按条数一刀切更有信息量
+  ratedOnly: {
+    keepBookmarks: true, keepReviews: true, keepBookReviews: true,
+    maxBookmarksPerBook: 0, maxReviewsPerBook: 0, ratedOnly: true,
+  },
 };
 
 async function loadReviewData() {
@@ -1464,6 +1546,7 @@ async function loadReviewData() {
   var data = await res.json();
   $('raw-json').textContent = JSON.stringify(data, null, 2);
   renderReviewStep(data);
+  await loadLocalFiles();
   await refreshEstimate();
   return data;
 }
@@ -1475,6 +1558,7 @@ function readCfInputs() {
     keepBookReviews: $('cf-bookreviews').checked,
     maxBookmarksPerBook: parseInt($('cf-bm-cap').value, 10) || 0,
     maxReviewsPerBook: parseInt($('cf-rv-cap').value, 10) || 0,
+    ratedOnly: $('cf-rated-only').checked,
   };
 }
 
@@ -1482,6 +1566,7 @@ function syncCfInputs(cf) {
   $('cf-bookmarks').checked = !!cf.keepBookmarks;
   $('cf-reviews').checked = !!cf.keepReviews;
   $('cf-bookreviews').checked = !!cf.keepBookReviews;
+  $('cf-rated-only').checked = !!cf.ratedOnly;
   $('cf-bm-cap').value = cf.maxBookmarksPerBook ? cf.maxBookmarksPerBook : '';
   $('cf-rv-cap').value = cf.maxReviewsPerBook ? cf.maxReviewsPerBook : '';
 }
@@ -1522,15 +1607,16 @@ async function refreshEstimate() {
     var d = await res.json();
     currentTokens = d.tokens;
 
-    // 全量保留时确立基线
+    // 全量保留时确立基线（ratedOnly 也算一种收窄，不能拿来当基线）
     if (!baselineTokens && d.kept.bookmarks && d.kept.reviews && d.kept.bookReviews
-        && !$('cf-bm-cap').value && !$('cf-rv-cap').value) {
+        && !d.kept.ratedOnly && !$('cf-bm-cap').value && !$('cf-rv-cap').value) {
       baselineTokens = d.tokens;
     }
 
     $('cf-bm-count').textContent = '(' + d.counts.bookmarks + ')';
     $('cf-rv-count').textContent = '(' + d.counts.reviews + ')';
     $('cf-br-count').textContent = '(' + d.counts.bookReviews + ')';
+    $('cf-rated-count').textContent = '（打过分的 ' + (d.counts.ratedBooks || 0) + ' 本）';
 
     var saved = '';
     if (baselineTokens && baselineTokens > 0 && currentTokens < baselineTokens) {
@@ -1557,7 +1643,7 @@ document.querySelectorAll('.cf-preset').forEach(function(btn) {
   });
 });
 
-['cf-bookmarks', 'cf-reviews', 'cf-bookreviews'].forEach(function(id) {
+['cf-bookmarks', 'cf-reviews', 'cf-bookreviews', 'cf-rated-only'].forEach(function(id) {
   $(id).addEventListener('change', function() {
     applyContentFilter(readCfInputs(), null);
   });
@@ -1567,6 +1653,158 @@ document.querySelectorAll('.cf-preset').forEach(function(btn) {
   $(id).addEventListener('change', function() {
     applyContentFilter(readCfInputs(), null);
   });
+});
+
+// ── 本地上传文件的自选分类 ──
+
+let localFiles = [];
+let localSlots = [];
+let localPicks = {};   // {bookId: {slot, note}} —— 含未保存的草稿
+
+function starText(v) {
+  if (v === null || v === undefined) return '';
+  var full = Math.floor(v);
+  var half = (v - full) >= 0.5 ? 1 : 0;
+  return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(Math.max(0, 5 - full - half));
+}
+
+// 重绘前把界面上未保存的输入收回来，否则用户写了一半的感悟会凭空消失
+function collectLocalPicksDraft() {
+  var draft = {};
+  var rows = document.querySelectorAll('#lf-rows .lf-row');
+  if (!rows.length) return draft;
+  rows.forEach(function(row) {
+    var slotEl = row.querySelector('[data-role=slot]');
+    var noteEl = row.querySelector('[data-role=note]');
+    if (!slotEl || !noteEl) return;
+    draft[row.dataset.bookId] = { slot: slotEl.value, note: noteEl.value };
+  });
+  return draft;
+}
+
+async function loadLocalFiles() {
+  if (!currentUid) return;
+  var draft = collectLocalPicksDraft();
+  try {
+    var res = await fetch(apiUrl('/api/data/local-picks/', currentUid));
+    if (!res.ok) return;
+    var d = await res.json();
+    localFiles = d.files || [];
+    localSlots = (d.slots || []).slice();
+    // 草稿优先：它代表用户正在编辑的状态，服务端那份是上次保存的
+    localPicks = Object.assign({}, d.picks || {}, draft);
+    renderLocalFiles();
+  } catch (e) { /* 后端没起或还没数据，忽略 */ }
+}
+
+function renderLocalFiles() {
+  if (!localFiles.length) { hide('local-files-box'); return; }
+  show('local-files-box');
+
+  var picked = 0;
+  Object.keys(localPicks).forEach(function(k) { if (localPicks[k] && localPicks[k].slot) picked++; });
+  $('lf-count').textContent = '共 ' + localFiles.length + ' 本，已选入 ' + picked + ' 本';
+
+  $('lf-rows').innerHTML = localFiles.map(function(f) {
+    var pick = localPicks[f.bookId] || { slot: '', note: '' };
+    var opts = ['<option value="">— 不参与评价 —</option>'].concat(localSlots.map(function(s) {
+      return '<option value="' + escapeHtml(s) + '"'
+        + (pick.slot === s ? ' selected' : '') + '>' + escapeHtml(s) + '</option>';
+    })).join('');
+
+    var counts = '划线 ' + (f.totalBookmarks || 0) + ' 条 ｜ 想法 ' + (f.totalReviews || 0) + ' 条';
+    if (f.totalBookReviews) counts += ' ｜ 书评 ' + f.totalBookReviews + ' 条';
+    var stars = (f.myRating !== null && f.myRating !== undefined)
+      ? '<span class="my-rating">我的评价 ' + starText(f.myRating) + '</span>' : '';
+
+    return '<div class="lf-row' + (pick.slot ? ' filled' : '') + '" data-book-id="'
+      + escapeHtml(f.bookId) + '">'
+      + '<div>'
+      +   '<div class="lf-name">' + escapeHtml(f.title) + stars + '</div>'
+      +   '<div class="lf-signals">判定依据：'
+      +     escapeHtml((f.sourceSignals || []).join('、') || '未记录') + '</div>'
+      +   '<div class="lf-counts">' + counts + '</div>'
+      + '</div>'
+      + '<div><label class="lf-slot-label">归类为</label>'
+      +   '<select data-role="slot">' + opts + '</select>'
+      +   '<button class="lf-unsplit" data-book-id="' + escapeHtml(f.bookId) + '">'
+      +     '↩︎ 其实是上架书籍</button></div>'
+      + '<textarea data-role="note" placeholder="写一段你对这本书的介绍与感悟（会放在该书的划线与想法前面）">'
+      +   escapeHtml(pick.note || '') + '</textarea>'
+      + '</div>';
+  }).join('');
+}
+
+function collectLocalPicks() {
+  var picks = {};
+  document.querySelectorAll('#lf-rows .lf-row').forEach(function(row) {
+    var slotEl = row.querySelector('[data-role=slot]');
+    var noteEl = row.querySelector('[data-role=note]');
+    if (!slotEl || !noteEl) return;
+    var slot = slotEl.value, note = noteEl.value.trim();
+    if (slot || note) picks[row.dataset.bookId] = { slot: slot, note: note };
+  });
+  return picks;
+}
+
+$('lf-save-btn').addEventListener('click', async function() {
+  if (!currentUid) return;
+  var btn = this;
+  btn.disabled = true;
+  btn.textContent = '⏳ 保存中...';
+  try {
+    var res = await fetch(apiUrl('/api/data/local-picks/', currentUid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ picks: collectLocalPicks() }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || '保存失败');
+    var d = await res.json();
+    localPicks = d.picks || {};
+    renderLocalFiles();
+    $('lf-hint').textContent = '✅ 已保存，选入的书会出现在书单末尾';
+    setTimeout(function() { $('lf-hint').textContent = ''; }, 3000);
+    await loadReviewData();
+  } catch (e) {
+    $('lf-hint').textContent = '❌ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '保存选择';
+  }
+});
+
+// 判定错的时候要有出口：把这本书放回上架书单
+async function restoreAsShelfBook(bookId) {
+  if (!currentUid || !bookId) return;
+  try {
+    var res = await fetch(apiUrl('/api/data/source-override/', currentUid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookId: bookId, source: 'weread' }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || '改判失败');
+    $('lf-hint').textContent = '✅ 已放回书单';
+    setTimeout(function() { $('lf-hint').textContent = ''; }, 3000);
+    localPicks = {};
+    await loadLocalFiles();
+    await loadReviewData();
+  } catch (e) {
+    $('lf-hint').textContent = '❌ ' + e.message;
+  }
+}
+
+$('lf-rows').addEventListener('click', function(e) {
+  var btn = e.target.closest('.lf-unsplit');
+  if (!btn) return;
+  restoreAsShelfBook(btn.dataset.bookId);
+});
+
+$('lf-add-slot-btn').addEventListener('click', function() {
+  var name = $('lf-new-slot-name').value.trim();
+  if (!name) return;
+  if (localSlots.indexOf(name) < 0) localSlots.push(name);
+  $('lf-new-slot-name').value = '';
+  // 先收回界面上的输入再重绘，否则新分类一带出来，刚写的感悟就没了
+  localPicks = Object.assign({}, localPicks, collectLocalPicksDraft());
+  renderLocalFiles();
 });
 
 // ── Step 5: 联网补检配置 ──
@@ -1692,6 +1930,8 @@ function renderReviewStep(data) {
       '<div class="stat-box"><div class="num">' + stats.totalBookmarks + '</div><div class="label">划线条数</div></div>' +
       '<div class="stat-box"><div class="num">' + stats.totalReviews + '</div><div class="label">想法条数</div></div>' +
       '<div class="stat-box"><div class="num">' + (stats.totalBookReviews || 0) + '</div><div class="label">书评条数</div></div>' +
+      '<div class="stat-box"><div class="num">' + (stats.ratedBooks || 0) + '</div><div class="label">我打过分的书</div></div>' +
+      '<div class="stat-box"><div class="num">' + (stats.localFiles || 0) + '</div><div class="label">本地上传文件</div></div>' +
       '</div>';
 
     if (stats.topCategories && stats.topCategories.length) {
@@ -1719,9 +1959,19 @@ function renderReviewStep(data) {
     var parts = ['划线: ' + (b.totalBookmarks ?? 0) + ' 条', '想法: ' + (b.totalReviews ?? 0) + ' 条'];
     if (b.totalBookReviews) parts.push('书评: ' + b.totalBookReviews + ' 条');
 
-    listHtml += '<div class="book-card" id="review-card-' + i + '" data-book-id="' + escapeHtml(bid) + '"><details><summary>' + escapeHtml(b.title || '无标题') + '</summary>' +
-      '<div class="meta">作者: ' + escapeHtml(b.author || '-') + ' ｜ 分类: ' + escapeHtml(cats) + ' ｜ 评分: ' + (b.rating ? b.rating.toFixed(1) : '-') + '</div>' +
+    var myStars = (b.myRating !== null && b.myRating !== undefined)
+      ? '<span class="my-rating">我的评价 ' + starText(b.myRating) + '</span>' : '';
+    var localBadge = (b.source === 'local')
+      ? '<span class="local-badge">📁 本地上传' + (b.userSlot ? '｜' + escapeHtml(b.userSlot) : '') + '</span>' : '';
+
+    listHtml += '<div class="book-card" id="review-card-' + i + '" data-book-id="' + escapeHtml(bid) + '"><details><summary>' + escapeHtml(b.title || '无标题') + localBadge + '</summary>' +
+      '<div class="meta">作者: ' + escapeHtml(b.author || '-') + ' ｜ 分类: ' + escapeHtml(cats) + ' ｜ 社区评分: ' + (b.rating ? b.rating.toFixed(1) : '-') + myStars + '</div>' +
       '<div class="meta">' + parts.join(' ｜ ') + '</div>';
+
+    if (b.userNote) {
+      listHtml += '<div class="meta" style="background:#fffaf0;border-left:3px solid #f59e0b;padding:6px 10px;">'
+        + '<b>你的介绍与感悟：</b>' + escapeHtml(b.userNote) + '</div>';
+    }
 
     if (b.intro) {
       var fullIntro = b.intro;

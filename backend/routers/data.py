@@ -11,12 +11,16 @@ from dataclasses import dataclass, field
 from stdhttp import App, HTTPError, Raw, SSE
 from stdmodel import Model
 
-from config import FILTER_TIMEOUT
+from config import FILTER_TIMEOUT, LOCAL_PICK_SLOTS
 from services.demo import build_demo_data
 from services.weread import extract_all_data, preflight
 from store import store
 
 router = App(prefix="/api")
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 @dataclass
@@ -26,6 +30,8 @@ class ContentFilterInput(Model):
     keepBookReviews: bool | None = None
     maxBookmarksPerBook: int | None = None
     maxReviewsPerBook: int | None = None
+    # 只保留"我打过分的书"的划线/想法，其余书只留书单行
+    ratedOnly: bool | None = None
 
 
 @dataclass
@@ -36,8 +42,10 @@ class ExtractInput(Model):
         return "book_reviews" if (self.mode or "full") == "book_reviews" else "full"
 
 
-def _sse(payload: dict) -> str:
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+@dataclass
+class LocalPicksInput(Model):
+    """本地上传文件的分类选择：{bookId: {"slot": "印象最深", "note": "…"}}。"""
+    picks: dict = field(default_factory=dict)
 
 
 # ── 提取 ───────────────────────────────────────────────
@@ -269,6 +277,60 @@ async def restore_book(uid: str, body: dict):
     if book_id in sess["deleted_book_ids"]:
         sess["deleted_book_ids"].remove(book_id)
     return {"status": "ok"}
+
+
+@dataclass
+class SourceOverrideInput(Model):
+    """人工改判来源：source = "weread" | "local" | null（null 撤销改判）。"""
+    bookId: str = ""
+    source: str | None = None
+
+
+@router.post("/data/source-override/{uid}")
+async def set_source_override(uid: str, body: SourceOverrideInput):
+    """把某本书在「上架书籍 / 本地上传文件」之间手动改判。
+
+    自动判定按元数据缺失度打分，冷门书偶尔会被误判成本地文件而从书单消失。
+    这个端点就是那个出口：改回 "weread" 即可放回书单。
+    """
+    sess = store.get(uid)
+    if not sess:
+        raise HTTPError(status_code=404, detail="session not found")
+    if not body.bookId:
+        raise HTTPError(status_code=400, detail="bookId required")
+    if body.source not in ("weread", "local", None):
+        raise HTTPError(status_code=400, detail='source must be "weread", "local" or null')
+    overrides = store.set_source_override(sess, body.bookId, body.source)
+    return {"status": "ok", "overrides": overrides}
+
+
+@router.get("/data/local-picks/{uid}")
+async def get_local_picks(uid: str):
+    """当前会话里被判定为「本地上传文件」的书 + 已做的分类选择。"""
+    sess = store.get(uid)
+    if not sess:
+        raise HTTPError(status_code=404, detail="session not found")
+    data = store.active_data(sess)
+    return {
+        "slots": list(LOCAL_PICK_SLOTS),
+        "files": (data or {}).get("localFiles", []),
+        "picks": sess.get("local_picks") or {},
+        "overrides": sess.get("source_overrides") or {},
+    }
+
+
+@router.post("/data/local-picks/{uid}")
+async def set_local_picks(uid: str, body: LocalPicksInput):
+    """保存用户对本地上传文件的分类选择。
+
+    这些文件没有书名/分类/评分，默认不进书单；只有被归入某个分类的
+    才会参与评价，并带上用户写的介绍感悟。
+    """
+    sess = store.get(uid)
+    if not sess:
+        raise HTTPError(status_code=404, detail="session not found")
+    picks = store.set_local_picks(sess, body.picks)
+    return {"status": "ok", "picks": picks}
 
 
 @router.post("/data/content-filter/{uid}")

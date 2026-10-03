@@ -538,8 +538,14 @@ def _obscurity_score(book: dict) -> int:
 
 
 def select_candidates(books: list[dict], preset: dict) -> list[dict]:
-    """工序一：选书。按信息缺失度排序，卡 min_score 与 max_books 两道闸。"""
-    scored = [(_obscurity_score(b), b) for b in books]
+    """工序一：选书。按信息缺失度排序，卡 min_score 与 max_books 两道闸。
+
+    本地上传文件直接排除：它们没有 ISBN、没有站内页面，检索式里那串文件名
+    搜不到任何东西，只会白白吃掉补检名额（它们的"信息缺失度"必然满分，
+    不过滤的话永远排在候选最前面）。
+    """
+    pool = [b for b in books if b.get("source") != "local"]
+    scored = [(_obscurity_score(b), b) for b in pool]
     scored = [item for item in scored if item[0] >= preset["min_score"]]
     scored.sort(key=lambda x: -x[0])
     return [b for _, b in scored[: preset["max_books"]]]

@@ -14,6 +14,7 @@ extract_all_data 的时序（与前端 step-3 的 SSE 状态机严格对应）�
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import Counter
 
@@ -67,18 +68,39 @@ _ABSTRACT_FIELDS = (
 )
 
 
-def _review_field(r: dict, field: str, default=None):
-    """review 字段可能嵌套在 r['review'] 里，也可能平铺在 r 上。"""
-    inner = r.get("review")
-    if isinstance(inner, dict) and field in inner:
-        return inner.get(field)
-    if field in r:
-        return r.get(field)
+_NESTING_MAX = 3
+
+
+def _deep_field(r, field: str, default=None):
+    """review 字段可能平铺在 r 上，也可能嵌在 r['review']，甚至双层 r['review']['review']。
+
+    三种结构都真实存在：
+        mine=1 的想法      r.review.content / r.review.type
+        公开点评           r.review.review.content / ...star
+        部分端点           r.content / r.type
+
+    只查两层会把公开点评那一类的内容全丢掉（历史上这里出过"unknown type"告警）。
+    """
+    node = r
+    for _ in range(_NESTING_MAX):
+        if not isinstance(node, dict):
+            return default
+        if field in node:
+            return node.get(field)
+        inner = node.get("review")
+        if not isinstance(inner, dict):
+            return default
+        node = inner
     return default
 
 
+def _review_field(r: dict, field: str, default=None):
+    """对外保持旧名字，内部走多层查找。"""
+    return _deep_field(r, field, default)
+
+
 def _review_type(r: dict):
-    val = _review_field(r, "type")
+    val = _deep_field(r, "type")
     if isinstance(val, bool):
         return None
     if isinstance(val, int):
@@ -97,6 +119,141 @@ def _extract_abstract(r: dict) -> str:
         if val:
             return val
     return ""
+
+
+# ── 用户评价（我给这本书打的分）────────────────────────
+
+def _normalize_star(val) -> float | None:
+    """把各种口径的评分归一到 0–5 星；无评分返回 None。
+
+    两种真实口径都见过：
+      · /review/list/mine 的 star：0–5，-1 表示无评分（微信读书官方 skill 文档）
+      · 公开点评的 star：20/40/60/80/100 对应 1–5 星
+    """
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return None
+    v = float(val)
+    if v <= 0:
+        return None
+    if v <= 5:
+        return round(v, 2)
+    if v <= 100:
+        return round(v / 20.0, 2)
+    return None
+
+
+# 响应根上的评分字段（不同端点放的位置不一样，逐个试）
+_RESPONSE_RATING_FIELDS = (
+    "myRating", "myStar", "userRating", "myRatingScore", "star", "bookRating",
+)
+
+
+def _response_rating(data: dict) -> float | None:
+    """顶层兜底：有些端点把「我的评分」放在响应根上而不是 reviews 里。"""
+    if not isinstance(data, dict):
+        return None
+    for field in _RESPONSE_RATING_FIELDS:
+        val = _normalize_star(data.get(field))
+        if val is not None:
+            return val
+    return None
+
+
+def extract_my_rating(all_reviews: list) -> tuple[float | None, str]:
+    """从自己的想法/书评里找用户给这本书的评分。
+
+    微信读书允许对一本书写多条点评，但评分只有一次 —— 真正计入的是带 star 的那条，
+    其余只是文字。所以优先取 type=4（书评）里含 star 的那条，
+    找不到才退到任意含 star 的条目。
+
+    返回 (0–5 星的评分 或 None, 命中来源："book_review" / "review" / "")。
+    """
+    fallback: tuple[float, str] | None = None
+    for r in all_reviews:
+        if not isinstance(r, dict):
+            continue
+        star = _normalize_star(_deep_field(r, "star"))
+        if star is None:
+            continue
+        if _review_type(r) == 4:
+            return star, "book_review"
+        if fallback is None:
+            fallback = (star, "review")
+    if fallback:
+        return fallback
+    return None, ""
+
+
+# ── 来源判定：上架书籍 vs 本地上传文件 ────────────────
+
+# 本地上传的文件名几乎总带扩展名，上架书籍的书名不会。最直观的一条硬信号。
+_LOCAL_FILE_SUFFIX_RE = re.compile(
+    r"\.(pdf|epub|txt|mobi|azw3?|docx?|pptx?|xlsx?|md|html?|cbz|djvu|rtf|odt)$",
+    re.I,
+)
+
+# 上架书籍在 book/info 里必带的元数据；本地上传文件这些字段几乎全空。
+# 权重 = 该字段作为"上架证据"的强度（ISBN 只有正式出版物才有）。
+_SHELF_SIGNALS = (
+    ("isbn", 3, "ISBN"),
+    ("newRating", 2, "社区评分"),
+    ("newRatingCount", 2, "评分人数"),
+    ("publisher", 2, "出版社"),
+    ("publishTime", 1, "出版时间"),
+    ("wordCount", 1, "字数"),
+    ("category", 1, "分类"),
+    ("intro", 1, "简介"),
+    ("author", 1, "作者"),
+)
+
+# 命中权重和 ≥ 这个值判为上架。ISBN 一项即可达标；
+# 只有书名、没有任何出版物元数据的上传文件只能拿到 0 分，判为本地。
+_SHELF_SCORE_MIN = 2
+
+
+def classify_book_source(book: dict, info: dict) -> tuple[str, list[str]]:
+    """判定一本书是「微信读书上架书籍」还是「用户本地上传的文件」。
+
+    为什么必须判：本地上传的文件名常常不是书名（扫描件、论文 PDF、内部资料），
+    它们混进书单会让 LLM 对着一串文件名编造阅读品味，还会占掉抽样名额。
+
+    判据从强到弱：
+      1. 书名带电子书扩展名 → 本地（硬信号，直接定案）
+      2. book/info 返回空 / 带 errcode / 无书名 → 本地（书城里查无此书）
+      3. 统计出版物元数据字段的加权命中数，≥ _SHELF_SCORE_MIN → 上架，否则本地
+
+    返回 ("weread" | "local", 命中的证据名列表)。证据会回传给前端，
+    判定不准时用户能看见依据并手动改判。
+    """
+    title = (book.get("title") or info.get("title") or "").strip() if isinstance(info, dict) else (book.get("title") or "").strip()
+
+    if title and _LOCAL_FILE_SUFFIX_RE.search(title):
+        return "local", ["书名带电子书扩展名"]
+
+    if not isinstance(info, dict) or not info:
+        return "local", ["书籍详情接口无返回"]
+
+    if info.get("errcode"):
+        return "local", [f"书籍详情 errcode={info.get('errcode')}"]
+
+    if not (info.get("title") or book.get("title") or "").strip():
+        return "local", ["书籍详情无书名"]
+
+    hits: list[str] = []
+    score = 0
+    for field, weight, label in _SHELF_SIGNALS:
+        val = info.get(field)
+        if isinstance(val, str):
+            if not val.strip():
+                continue
+        elif not val:
+            continue
+        score += weight
+        hits.append(label)
+
+    if score >= _SHELF_SCORE_MIN:
+        return "weread", hits
+    return "local", hits or ["出版物元数据字段全空"]
 
 
 def _chapter_title(review: dict, chapters_map: dict) -> str:
@@ -143,11 +300,14 @@ def parse_book_detail(
         for r in type1
     ]
 
+    # 一本书可以写多条书评，但只有带 star 的那条计入评分。
+    # 把 star 一并留下来，prompt 里就能优先展示"真正起效"的那条。
     book_reviews = [
         {
             "content": _review_field(r, "content"),
             "htmlContent": _review_field(r, "htmlContent") or "",
             "createTime": _review_field(r, "createTime"),
+            "star": _normalize_star(_deep_field(r, "star")),
             "type": 4,
         }
         for r in type4
@@ -170,6 +330,16 @@ def parse_book_detail(
             entry["reviewContent"] = range_to_review[rng]
         highlights.append(entry)
 
+    my_rating, rating_src = extract_my_rating(all_reviews)
+    if my_rating is None:
+        # reviews 里都没有，再看看响应根上有没有
+        top = _response_rating(reviews_data)
+        if top is not None:
+            my_rating, rating_src = top, "response"
+    source, source_signals = classify_book_source(book, info)
+    if source == "local":
+        api.log(f"  local file: {book.get('title', '')[:30]} signals={source_signals}")
+
     return {
         "bookId": book.get("bookId"),
         "title": book.get("title"),
@@ -178,6 +348,14 @@ def parse_book_detail(
         "category": info.get("category"),
         "rating": (info.get("newRating", 0) or 0) / 1000,
         "intro": info.get("intro", ""),
+        # 我给这本书打的分（0-5 星）。没有评分就是 None —— 与"书评 0 条"是两回事：
+        # 可以只打分不写书评，也可以写很多条书评但只有一条带评分。
+        "myRating": my_rating,
+        "myRatingSource": rating_src,
+        "hasMyRating": my_rating is not None,
+        # 上架书籍 / 本地上传文件
+        "source": source,
+        "sourceSignals": source_signals,
         "totalBookmarks": len(highlights),
         "totalReviews": len(reviews),
         "totalBookReviews": len(book_reviews),
@@ -217,11 +395,15 @@ def apply_time_filter(books_raw: list, timeline: list, filter_data: dict) -> lis
 def compute_stats(books: list[dict]) -> dict:
     categories = Counter(b.get("category", "") for b in books if b.get("category"))
     authors = Counter(b.get("author", "") for b in books if b.get("author"))
+    rated = [b.get("myRating") for b in books if b.get("myRating") is not None]
     return {
         "totalBooks": len(books),
         "totalBookmarks": sum(b.get("totalBookmarks", 0) for b in books),
         "totalReviews": sum(b.get("totalReviews", 0) for b in books),
         "totalBookReviews": sum(b.get("totalBookReviews", 0) for b in books),
+        "localFiles": sum(1 for b in books if b.get("source") == "local"),
+        "ratedBooks": len(rated),
+        "avgMyRating": round(sum(rated) / len(rated), 2) if rated else 0,
         "topCategories": categories.most_common(10),
         "topAuthors": authors.most_common(10),
     }
@@ -392,7 +574,9 @@ async def extract_all_data(
             f"book {index} {book.get('title', '')[:20]} "
             f"highlights={result['totalBookmarks']} "
             f"reviews={result['totalReviews']} "
-            f"bookReviews={result['totalBookReviews']}"
+            f"bookReviews={result['totalBookReviews']} "
+            f"myRating={result['myRating']}({result['myRatingSource'] or '-'}) "
+            f"source={result['source']}"
         )
         if progress_callback:
             await progress_callback(
