@@ -45,19 +45,25 @@ class BrowserSession:
                 "playwright install chromium。若只想用示例数据跑通流程，"
                 "点前端的「一键体验」即可，无需安装。"
             ) from e
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(
-            headless=True, args=["--no-sandbox"]
-        )
-        self.context = await self.browser.new_context(
-            user_agent=USER_AGENT, locale="zh-CN"
-        )
-        self.page = await self.context.new_page()
-        self.page.on("response", self._on_response)
+        try:
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(
+                headless=True, args=["--no-sandbox"]
+            )
+            self.context = await self.browser.new_context(
+                user_agent=USER_AGENT, locale="zh-CN"
+            )
+            self.page = await self.context.new_page()
+            self.page.on("response", self._on_response)
 
-        await self.page.goto(LOGIN_URL, wait_until="domcontentloaded")
-        await asyncio.sleep(3)
-        await self._capture_qrcode()
+            await self.page.goto(LOGIN_URL, wait_until="domcontentloaded")
+            await asyncio.sleep(3)
+            await self._capture_qrcode()
+        except BaseException:
+            # 半途失败时浏览器可能已经起来了。异常继续往上抛给路由，
+            # 但先把已经占用的资源放掉，否则每次失败漏一个 Chromium 进程。
+            await self.close()
+            raise
 
     def _on_response(self, response):
         url = response.url

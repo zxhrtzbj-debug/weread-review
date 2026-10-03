@@ -1008,6 +1008,10 @@ function pollBrowserLogin(sid) {
   };
 
   loginEventSource.onerror = function() {
+    // 流正常收尾（登录成功/超时后 close）也会触发 onerror，
+    // 只有连接真的断了才提示，否则成功的那一帧会被这句覆盖掉。
+    if (loginEventSource.readyState === EventSource.CLOSED) return;
+    if (loginEventSource.readyState === EventSource.CONNECTING) return; // 浏览器自己在重连
     $('login-status').innerHTML = '<span class="status-badge error">⚠️ 连接断开</span>';
   };
 }
