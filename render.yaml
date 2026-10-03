@@ -1,0 +1,27 @@
+# Render 部署配置：仓库推上去后在 Render 里点 New → Blueprint 即可。
+# 也可以用 README 里的 "Deploy to Render" 按钮。
+#
+# 免费额度说明：free 实例 15 分钟无请求就休眠，冷启动约 30-60 秒。
+# 介意的话换 starter 套餐，或者本地 start.sh 跑。
+
+services:
+  - type: web
+    name: weread-review
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: WEREREAD_DEPLOY
+        value: "1"
+      # PORT 由 Render 注入，不要写死
+      - key: HOST
+        value: "0.0.0.0"
+      # 强烈建议在 Render 面板里加上 ACCESS_TOKEN（Secret），
+      # 不加的话任何拿到链接的人都能用你的实例跑数据。
+      # 前端会自动提示输入，链接形式：https://<你的域名>/?token=<口令>
+      - key: SESSION_TTL
+        value: "7200"
+      - key: MAX_SESSIONS
+        value: "200"

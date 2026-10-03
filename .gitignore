@@ -1,5 +1,29 @@
+# macOS
 .DS_Store
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 venv/
+
+# 环境变量与日志：可能含 token，绝不能进仓库
+.env
+.env.local
+*.log
+
+# 数据库与本地数据
+*.sqlite
+*.db
+
+# 前端
+node_modules/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 本机 agent 的工作记忆，不属于项目源码
+.workbuddy/

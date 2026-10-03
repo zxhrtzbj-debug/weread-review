@@ -1,0 +1,21 @@
+# 这个项目零第三方运行时依赖，唯一的可选依赖是 playwright（扫码登录才需要）。
+# 把它列为可选升级：真装了才会检查版本，没装就静默跳过。
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    pipeline:
+      - name: 扫描依赖声明
+        requirements: requirements-login.txt
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies]
+    commit-message: "chore(deps): playwright {dependency}"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies, ci]
+    commit-message: "chore(ci): {action} {dependency}"

@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同一个 PR 连续推多次时只跑最后一次，避免浪费额度
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: 冒烟测试 (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 是代码里声明的最低版本，3.12/3.13 是当前主流
+        python-version: ["3.10", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 项目零第三方依赖，这一步是刻意留的：它验证"真的不需要装包"这件事
+      # 哪天有人不小心 import 了 requests，CI 会当场抓住
+      - name: 确认零第三方依赖
+        run: |
+          python -c "import sys, pathlib"
+          pip list --format=freeze | grep -vE '^(pip|setuptools|wheel)=' > /tmp/installed.txt || true
+          echo "预装包："; cat /tmp/installed.txt
+          echo "（应只有 pip/setuptools/wheel，运行时零依赖）"
+
+      - name: 编译检查
+        run: python -m compileall -q backend/ smoke_test.py
+
+      - name: 跑冒烟测试
+        run: python smoke_test.py
+
+  frontend:
+    name: 前端 JS 语法检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # index.html 是单文件前端，JS 内嵌在 <script> 里。
+      # 之前批量替换 URL 时把括号吃掉过一次，这个检查就是防这类事故的。
+      - name: 校验内嵌 JS 可解析
+        run: |
+          node -e "
+          const fs = require('fs');
+          const html = fs.readFileSync('frontend/index.html', 'utf8');
+          const m = html.match(/<script[^>]*>([\s\S]*?)<\/script>/);
+          if (!m) { console.error('✗ 找不到 script 块'); process.exit(1); }
+          try { new Function(m[1]); }
+          catch (e) { console.error('✗ JS 语法错误: ' + e.message); process.exit(1); }
+          console.log('✓ JS 语法通过');
+          "
+
+  docker:
+    name: Docker 镜像构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建镜像
+        run: docker build -t weread-review:test .
+      # 构建通过还不够：起容器打一次 /api/health 才算真能用。
+      # 平台部署失败最常见的原因就是容器起不来而 CI 没发现。
+      - name: 启动容器并探活
+        run: |
+          docker run -d --name wr -p 8777:8777 weread-review:test
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8777/api/health > /tmp/health.json 2>/dev/null; then
+              echo "✓ 健康检查通过"; cat /tmp/health.json; echo
+              docker rm -f wr
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "✗ 容器 30 秒内没起来"; docker logs wr; docker rm -f wr; exit 1

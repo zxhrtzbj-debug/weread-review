@@ -1,0 +1,5 @@
+# 可选依赖：只有「扫码登录微信读书」才需要。
+# 只用示例数据（一键体验）时可以不装。
+# 装完包之后还需下载浏览器内核：
+#   .venv/bin/playwright install chromium
+playwright>=1.40.0

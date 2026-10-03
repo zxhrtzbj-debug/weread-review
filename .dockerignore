@@ -1,0 +1,22 @@
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.log
+.DS_Store
+Thumbs.db
+
+# 本地开发产物
+*.sqlite
+*.db
+node_modules/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# .workbuddy 是本机 agent 的工作记忆，不属于项目源码
+.workbuddy/

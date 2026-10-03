@@ -1,0 +1,47 @@
+name: Bug 报告
+description: 报告一个可复现的问题
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 描述你看到的现象，而不是你推断的原因
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 如何复现
+      description: 从哪一步开始，点了什么，预期是什么
+      placeholder: |
+        1. 打开 http://127.0.0.1:8777
+        2. 点「🧪 一键体验」
+        3. 走完第 4 步
+        4. 实际报错：…
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      placeholder: macOS 15.3 / Python 3.13 / 本地运行 或 Docker
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 终端输出
+      description: 报错时的完整 traceback。**请先删掉里面的 cookie 和 API Key**
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 确认
+      options:
+        - label: 我已确认没有在粘贴内容里包含 cookie 或 API Key
+          required: true
+        - label: 我用的是示例数据（🧪 一键体验），不涉及我的真实账号
