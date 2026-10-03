@@ -67,6 +67,14 @@ jobs:
           console.log('✓ JS 语法通过');
           "
 
+      # apiUrl(path, tail) 的 tail 必须拼在 query 之前。
+      # 写成 apiUrl(path) + uid 时，本地（无口令）完全正常，
+      # 一旦部署设了 ACCESS_TOKEN 就变成?token=口令uid → 路由 404、
+      # 二维码空白、SSE 连不上。这个 bug 上线过一次，本地永远测不出来，
+      # 所以把真实的 apiUrl 抠出来跑一遍。
+      - name: 校验带口令时 URL 拼接正确
+        run: node frontend_url_test.js
+
   docker:
     name: Docker 镜像构建
     runs-on: ubuntu-latest

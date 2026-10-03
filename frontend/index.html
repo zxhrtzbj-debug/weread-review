@@ -671,9 +671,13 @@ const ACCESS_TOKEN = new URLSearchParams(location.search).get('token')
   || localStorage.getItem('wr_access_token') || '';
 if (ACCESS_TOKEN) localStorage.setItem('wr_access_token', ACCESS_TOKEN);
 
-function apiUrl(path) {
-  if (!ACCESS_TOKEN) return API_BASE + path;
-  return API_BASE + path + (path.indexOf('?') >= 0 ? '&' : '?')
+function apiUrl(path, tail) {
+  // tail 是路径的动态部分（uid / sid）。它必须拼在 query 之前，
+  // 否则 `apiUrl('/api/x/', uid)` 会得到 `?token=xxx<uid>` —— 口令与 id 粘在一起，
+  // 路由直接 404。这是 ACCESS_TOKEN 出现之前的老调用方式留下的坑。
+  let p = path + (tail === undefined ? '' : tail);
+  if (!ACCESS_TOKEN) return API_BASE + p;
+  return API_BASE + p + (p.indexOf('?') >= 0 ? '&' : '?')
     + 'token=' + encodeURIComponent(ACCESS_TOKEN);
 }
 
@@ -879,7 +883,7 @@ $('config-save-btn').addEventListener('click', async function() {
   try {
     var uid = currentUid;
     if (uid) {
-      await fetch(apiUrl('/api/llm/config/') + uid, {
+      await fetch(apiUrl('/api/llm/config/', uid), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
       });
@@ -897,7 +901,7 @@ async function loadLlmConfig() {
   var cfg = null;
   if (currentUid) {
     try {
-      var res = await fetch(apiUrl('/api/llm/config/') + currentUid);
+      var res = await fetch(apiUrl('/api/llm/config/', currentUid));
       if (res.ok) cfg = await res.json();
     } catch (e) {}
   }
@@ -926,7 +930,7 @@ $('start-btn').addEventListener('click', async function() {
     if (!res.ok) throw new Error(data.detail || '启动失败');
     currentSid = data.sid;
     show('qr-area');
-    $('qr-img').src = apiUrl('/api/browser/qrcode/') + data.sid;
+    $('qr-img').src = apiUrl('/api/browser/qrcode/', data.sid);
     $('qr-img').onerror = function() {
       $('login-status').innerHTML = '<span class="status-badge error">二维码加载失败</span>';
     };
@@ -945,17 +949,17 @@ $('demo-btn').addEventListener('click', async function() {
   this.textContent = '⏳ 载入示例数据...';
   try {
     await ensureUid();
-    var res = await fetch(apiUrl('/api/demo/load/') + currentUid, { method: 'POST' });
+    var res = await fetch(apiUrl('/api/demo/load/', currentUid), { method: 'POST' });
     if (!res.ok) throw new Error((await res.json()).detail || '载入失败');
 
     var stored = localStorage.getItem('llm_config');
     if (stored) {
-      await fetch(apiUrl('/api/llm/config/') + currentUid, {
+      await fetch(apiUrl('/api/llm/config/', currentUid), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: stored,
       });
     }
     // 示例数据没有登录态，站内检索用不了 → 切成离线假数据，方便验证补检流程
-    await fetch(apiUrl('/api/search/config/') + currentUid, {
+    await fetch(apiUrl('/api/search/config/', currentUid), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: 'mock' }),
     });
@@ -973,7 +977,7 @@ $('demo-btn').addEventListener('click', async function() {
 });
 
 function pollBrowserLogin(sid) {
-  loginEventSource = new EventSource(apiUrl('/api/browser/status/') + sid);
+  loginEventSource = new EventSource(apiUrl('/api/browser/status/', sid));
 
   loginEventSource.onmessage = async function(event) {
     var d = JSON.parse(event.data);
@@ -1021,7 +1025,7 @@ async function transferCookies(cookies) {
   try {
     await ensureUid();
 
-    await fetch(apiUrl('/api/auth/cookies/') + currentUid, {
+    await fetch(apiUrl('/api/auth/cookies/', currentUid), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cookies: cookies }),
     });
@@ -1031,7 +1035,7 @@ async function transferCookies(cookies) {
     if (stored) {
       try {
         var cfg = JSON.parse(stored);
-        await fetch(apiUrl('/api/llm/config/') + currentUid, {
+        await fetch(apiUrl('/api/llm/config/', currentUid), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(cfg),
         });
@@ -1096,7 +1100,7 @@ async function runPreflight() {
   $('pf-list').innerHTML = '';
   hide('pf-hint');
   try {
-    var res = await fetch(apiUrl('/api/data/preflight/') + currentUid, { method: 'POST' });
+    var res = await fetch(apiUrl('/api/data/preflight/', currentUid), { method: 'POST' });
     var d = await res.json();
     if (!res.ok) throw new Error(d.detail || res.statusText);
 
@@ -1172,7 +1176,7 @@ $('extract-btn').addEventListener('click', async function() {
   );
 
   try {
-    var res = await fetch(apiUrl('/api/data/extract/') + currentUid, {
+    var res = await fetch(apiUrl('/api/data/extract/', currentUid), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: extractMode }),
@@ -1193,7 +1197,7 @@ $('extract-btn').addEventListener('click', async function() {
   // 起步阶段总量未知，用跑马灯表示"确实在动"
   setIndeterminate(true);
 
-  progressSource = new EventSource(apiUrl('/api/data/progress/') + currentUid);
+  progressSource = new EventSource(apiUrl('/api/data/progress/', currentUid));
   progressSource.onmessage = handleExtractEvent;
 
   progressSource.onerror = function() {
@@ -1291,12 +1295,12 @@ function handleExtractEvent(event) {
 // SSE 断开后的兜底：轮询 /data/status，任务还活着就回到 SSE
 async function checkExtractAlive() {
   try {
-    var res = await fetch(apiUrl('/api/data/status/') + currentUid);
+    var res = await fetch(apiUrl('/api/data/status/', currentUid));
     var d = await res.json();
     if (d.extracting) {
       setProgressText('⏳ 后端仍在提取（进度连接已重连）…');
       if (!progressSource || progressSource.readyState === 2) {
-        progressSource = new EventSource(apiUrl('/api/data/progress/') + currentUid);
+        progressSource = new EventSource(apiUrl('/api/data/progress/', currentUid));
         progressSource.onmessage = handleExtractEvent;
         progressSource.onerror = function() { checkExtractAlive(); };
       }
@@ -1415,7 +1419,7 @@ $('filter-confirm-btn').addEventListener('click', async function() {
     extractMode === 'book_reviews' ? '只提取书评模式' : '全量模式');
 
   try {
-    var res = await fetch(apiUrl('/api/data/set-filter/') + currentUid, {
+    var res = await fetch(apiUrl('/api/data/set-filter/', currentUid), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ startDate: startDate, endDate: endDate, excludedBookIds: excludedBookIds }),
     });
@@ -1451,7 +1455,7 @@ const CF_PRESETS = {
 
 async function loadReviewData() {
   if (!currentUid) return null;
-  var res = await fetch(apiUrl('/api/data/result/') + currentUid);
+  var res = await fetch(apiUrl('/api/data/result/', currentUid));
   if (!res.ok) return null;
   var data = await res.json();
   $('raw-json').textContent = JSON.stringify(data, null, 2);
@@ -1490,7 +1494,7 @@ async function applyContentFilter(patch, presetName) {
   el.className = 'cf-estimate loading';
   el.textContent = '正在重算…';
   try {
-    var res = await fetch(apiUrl('/api/data/content-filter/') + currentUid, {
+    var res = await fetch(apiUrl('/api/data/content-filter/', currentUid), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
@@ -1509,7 +1513,7 @@ async function refreshEstimate() {
   if (!currentUid) return;
   var el = $('cf-estimate');
   try {
-    var res = await fetch(apiUrl('/api/analysis/estimate/') + currentUid);
+    var res = await fetch(apiUrl('/api/analysis/estimate/', currentUid));
     if (!res.ok) throw new Error('unavailable');
     var d = await res.json();
     currentTokens = d.tokens;
@@ -1599,7 +1603,7 @@ function readSearchInputs() {
 async function loadSearchConfig() {
   if (!currentUid) return;
   try {
-    var res = await fetch(apiUrl('/api/search/config/') + currentUid);
+    var res = await fetch(apiUrl('/api/search/config/', currentUid));
     if (!res.ok) return;
     var cfg = await res.json();
     $('search-enabled').checked = !!cfg.enabled;
@@ -1617,7 +1621,7 @@ async function loadSearchConfig() {
 async function saveSearchConfig() {
   if (!currentUid) return;
   try {
-    await fetch(apiUrl('/api/search/config/') + currentUid, {
+    await fetch(apiUrl('/api/search/config/', currentUid), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(readSearchInputs()),
     });
@@ -1832,7 +1836,7 @@ $('books-container').addEventListener('click', function(e) {
     var card = btn.closest('.book-card');
     if (card && card.classList.contains('deleted')) return;
 
-    fetch(apiUrl('/api/data/delete-book/') + currentUid, {
+    fetch(apiUrl('/api/data/delete-book/', currentUid), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bookId: bookId }),
     }).then(function() {
@@ -1892,7 +1896,7 @@ document.querySelectorAll('.style-btn').forEach(function(btn) {
     currentStyle = this.dataset.style;
 
     if (currentUid) {
-      fetch(apiUrl('/api/analysis/style/') + currentUid, {
+      fetch(apiUrl('/api/analysis/style/', currentUid), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ style: currentStyle }),
       }).catch(function() {});
@@ -1910,7 +1914,7 @@ $('ai-btn').addEventListener('click', async function() {
   $('ai-progress-text').textContent = '正在启动分析...';
 
   try {
-    var res = await fetch(apiUrl('/api/analysis/start/') + currentUid, {
+    var res = await fetch(apiUrl('/api/analysis/start/', currentUid), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ use_search: $('search-enabled').checked }),
@@ -1926,7 +1930,7 @@ $('ai-btn').addEventListener('click', async function() {
     return;
   }
 
-  aiEventSource = new EventSource(apiUrl('/api/analysis/progress/') + currentUid);
+  aiEventSource = new EventSource(apiUrl('/api/analysis/progress/', currentUid));
 
   aiEventSource.onmessage = function(event) {
     var d = JSON.parse(event.data);
@@ -2070,7 +2074,7 @@ function escapeHtml(str) {
 // Enable going to AI step from step 3 if data already exists
 (function checkExistingData() {
   if (currentUid) {
-    fetch(apiUrl('/api/data/result/') + currentUid).then(function(res) {
+    fetch(apiUrl('/api/data/result/', currentUid)).then(function(res) {
       if (res.ok) return res.json();
       throw new Error('no data');
     }).then(function(data) {

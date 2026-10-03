@@ -270,13 +270,60 @@ def test_readme_matches_routes() -> None:
     )
 
 
+# ── 5. 前端URL 拼接（静态层） ─────────────────────────
+def test_frontend_url_building() -> None:
+    """带 uid/sid 的路径必须把动态段放在 query 之前。
+
+    这个坑很隐蔽：`apiUrl('/api/x/') + uid` 在本地（无口令）完全正常，
+    一旦线上设了 ACCESS_TOKEN 就变成 `?token=口令uid`，路由 404、二维码空白，
+    而本地怎么测都测不出来。
+
+    这里只做静态结构检查。真正执行 JS 验证拼接结果的检查在 CI 的 frontend
+    job 里（node侧）——Python 的 exec 跑不了 `const` 这类 JS 语法。
+    """
+    print("\n[5] 前端 URL 拼接（静态）")
+    html = (ROOT / "frontend" / "index.html").read_text(encoding="utf-8")
+
+    m = re.search(r"function apiUrl\(([^)]*)\)\s*\{(.*?)\n\}", html, re.S)
+    check("找到 apiUrl 定义", m is not None)
+    if not m:
+        return
+
+    params = m.group(1)
+    check("apiUrl 签名含 tail 参数", "tail" in params, f"实际: ({params})")
+
+    # 老写法（apiUrl(x) + y）必须已经全部消失
+    legacy = re.findall(r"apiUrl\([^)]*\)\s*\+", html)
+    check(
+        "没有 apiUrl(x) + y 的老写法",
+        not legacy,
+        f"仍有 {len(legacy)} 处: {legacy[:3]}" if legacy else "",
+    )
+
+    # 每个带动态段的调用都必须把动态段作为参数传进去，而不是在外面拼
+    tails = re.findall(r"apiUrl\('/api/[^']*',\s*([\w.$]+)\)", html)
+    check("动态段都作为 tail 参数传入", len(tails) >= 20, f"只找到 {len(tails)} 处")
+
+    # 动态段里不能出现裸对象属性截断（正则批量替换踩过的坑：
+    # `apiUrl(x, data).sid` 说明 data.sid 被误当成 data）
+    for bad in re.findall(r"apiUrl\([^)]*\)\s*\.\s*\w", html):
+        check(
+            "没有 apiUrl(...).prop 这种误伤写法",
+            False,
+            f"发现: {bad}",
+        )
+        break
+    else:
+        check("没有 apiUrl(...).prop 这种误伤写法", True)
+
+
 def main() -> int:
     print("=" * 56)
     print(" 微信读书 · AI 阅读评价 —— 冒烟测试")
     print("=" * 56)
 
     for fn in (test_open_mode, test_auth_mode, test_session_eviction,
-               test_readme_matches_routes):
+               test_readme_matches_routes, test_frontend_url_building):
         try:
             fn()
         except Exception as e:  # noqa: BLE001
