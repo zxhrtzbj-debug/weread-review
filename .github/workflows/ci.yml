@@ -85,6 +85,11 @@ jobs:
       - name: 跑 step-4 交互（本地文件面板 / 改判 / 内容筛选）
         run: node archive/diagnose/jsdom_local_picks.js
 
+      # 报告页的字段全部来自后端 JSON（知识画像是两阶段分析第一轮的产物），
+      # 字段名取错或对缺失字段不免疫都会整块空白，静态检查看不见，只能真渲染。
+      - name: 跑 step-6 报告渲染（含知识画像）
+        run: node archive/diagnose/jsdom_knowledge_profile.js
+
   docker:
     name: Docker 镜像构建
     runs-on: ubuntu-latest

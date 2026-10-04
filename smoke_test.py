@@ -317,13 +317,194 @@ def test_frontend_url_building() -> None:
         check("没有 apiUrl(...).prop 这种误伤写法", True)
 
 
+# ── 6. 两阶段分析 ─────────────────────────────────────
+def test_analyzer_two_stage() -> None:
+    """书单配额抽样的三个分支、痕迹视图、背景陈述、阶段一失败的降级。
+
+    这些都是纯函数/纯字符串，不需要起服务，所以放在这里和接口测试一起跑。
+    """
+    print("\n[6] 两阶段分析（配额抽样 / 痕迹视图 / 背景陈述 / 降级）")
+    sys.path.insert(0, str(ROOT / "backend"))
+    sys.dont_write_bytecode = True
+    import asyncio  # noqa: E402
+    from services import analyzer  # noqa: E402
+    from services.demo import build_demo_data  # noqa: E402
+    from services.llm import LLMConfig  # noqa: E402
+
+    def book(i: int, cat: str, my=None, rating: float = 7.0, traces: int = 0) -> dict:
+        b = {
+            "bookId": f"b{i}", "title": f"书{i}", "author": "A", "category": cat,
+            "rating": rating, "myRating": my, "source": "shelf",
+            "totalBookmarks": traces, "totalReviews": 0, "totalBookReviews": 0,
+            "bookmarks": [], "reviews": [], "bookReviews": [],
+        }
+        if traces:
+            b["bookmarks"] = [
+                {"markText": f"划线{j}", "chapterTitle": "第一章"} for j in range(traces)
+            ]
+        return b
+
+    # ── 分支一：有我的评分的书 少于 配额 → 全取 + 从"只有社区评分"里交替补齐
+    books = (
+        [book(i, "A", rating=6.0 + i * 0.1) for i in range(2)]          # 参考分类 2 本
+        + [book(10 + i, "B", my=(4 if i < 3 else None),
+                rating=5.0 + i * 0.3) for i in range(10)]               # 3 本有评分
+        + [book(30 + i, "C", my=3 + (i % 3),
+                rating=8.0 - i * 0.1) for i in range(6)]                # 6 本全有评分
+    )
+    kept, info = analyzer.sample_shelf_list(books)
+    check("参考分类取书最少的那个", info.get("ref_category") == "A", str(info))
+    check("配额 = max(参考分类本数, 5)", info.get("quota") == 5, str(info))
+    check("参考分类全部保留", sum(1 for b in kept if b["category"] == "A") == 2)
+    check("有评分的书不足配额时先全取",
+          sum(1 for b in kept if b["category"] == "B" and b["myRating"] is not None) == 3)
+    check("不足的份额从无评分的书里补齐到配额",
+          sum(1 for b in kept if b["category"] == "B") == 5,
+          str(sum(1 for b in kept if b["category"] == "B")))
+    check("有评分的书超额时截取到配额",
+          sum(1 for b in kept if b["category"] == "C") == 5,
+          str(sum(1 for b in kept if b["category"] == "C")))
+    check("清单总量 = Σ各类配额", info.get("kept") == 12, str(info))
+
+    # ── 分支二：有我的评分的书 正好等于 配额 → 直接取这些
+    books2 = (
+        [book(i, "A", rating=6.0) for i in range(2)]
+        + [book(100 + i, "D", my=4, rating=7.0 + i * 0.1) for i in range(5)]
+        + [book(200 + i, "D", my=None, rating=9.9 - i * 0.1) for i in range(4)]
+    )
+    kept2, _ = analyzer.sample_shelf_list(books2)
+    picked_d = [b for b in kept2 if b["category"] == "D"]
+    check("有评分的书正好等于配额时直接取这些",
+          len(picked_d) == 5 and all(b["myRating"] is not None for b in picked_d),
+          f"n={len(picked_d)}")
+
+    # ── 分支三：分类只有一个时不做配额，全部保留
+    kept3, info3 = analyzer.sample_shelf_list([book(i, "Z") for i in range(9)])
+    check("单一分类不抽样", len(kept3) == 9 and info3["categories"] == 1, str(info3))
+
+    # ── 交替顺序：最高 → 最低 → 次高 → 次低
+    pool = [book(i, "P", rating=float(i)) for i in range(1, 7)]
+    alt = analyzer._pick_alternating(pool, analyzer._community_key, 4)
+    order = [b["rating"] for b in alt]
+    check("交替抽样顺序为 最高/最低/次高/次低",
+          order == [6.0, 1.0, 5.0, 2.0], str(order))
+
+    # ── 痕迹视图
+    data = build_demo_data()
+    traces = analyzer.build_traces_view(data)
+    check("痕迹视图非空", len(traces) > 100, f"{len(traces)} 字符")
+    check("痕迹视图标明总数与摘录数", "划线共" in traces and "以下摘录" in traces)
+    check("痕迹视图受字符预算封顶",
+          len(traces) <= analyzer._TRACE_CHAR_BUDGET + 4000, f"{len(traces)}")
+
+    # ── 背景陈述的关键条款
+    # 条款本身要写成肯定式的口径说明；同时断言里面没有禁令式措辞——
+    # 实测"不要建议平衡其他领域"这类句子会被模型直接当成小标题执行。
+    brief = analyzer._render_brief()
+    for key in ("书籍清单", "配额抽样", "详细样本", "分类分布", "信息密度",
+                "展示上限", "本次纳入"):
+        check(f"背景陈述含「{key}」", key in brief)
+    for bad in ("红线", "无效", "禁止", "不要", "不代表", "不等于", "不是全量"):
+        check(f"背景陈述不含禁令式措辞「{bad}」", bad not in brief)
+
+    # 正文里的口径声明同样要肯定式
+    profile_view = analyzer.build_reading_profile(build_demo_data())
+    for bad in ("不代表用户没有", "不要据此推断", "不是全量"):
+        check(f"书目视图不含「{bad}」", bad not in profile_view)
+    check("痕迹视图不含「不要把」", "不要把" not in traces)
+
+    # ── 阶段一失败必须降级，不能拖垮整条链路
+    report_json = json.dumps({
+        "overall_score": 7, "summary": "s", "dimensions": [], "strengths": [],
+        "weaknesses": [], "book_picks": {"top": [], "flop": []},
+        "recommendations": [], "one_liner": "x",
+    })
+
+    class Stage1Boom:
+        def __init__(self, _cfg):
+            self.seen = []
+
+        async def chat(self, system: str, messages) -> str:
+            self.seen.append(system)
+            if "阅读痕迹分析师" in system:
+                raise RuntimeError("阶段一炸了")
+            return report_json
+
+    holder = {}
+    original = analyzer.create_llm_client
+
+    def boom_factory(cfg):
+        c = Stage1Boom(cfg)
+        holder["client"] = c
+        return c
+
+    analyzer.create_llm_client = boom_factory
+    try:
+        out = asyncio.run(
+            analyzer.generate_report(build_demo_data(), LLMConfig(), "serious")
+        )
+    finally:
+        analyzer.create_llm_client = original
+
+    check("阶段一失败仍能出报告", out.get("overall_score") == 7, str(out)[:160])
+    check("阶段一失败时不伪造画像", out.get("knowledge_profile") is None)
+    check("两个阶段都各自带过完整背景",
+          len(holder.get("client").seen) == 2
+          and all("数据说明书" in s for s in holder["client"].seen),
+          f"calls={len(holder.get('client').seen)}")
+
+    # ── 阶段一成功 → 画像回填进最终报告
+    profile_json = json.dumps({
+        "headline": "一个爱追问机制的人",
+        "trace_overview": "共 12 条划线",
+        "axes": [{"name": "思维方式", "reading": "追因果链", "signals": ["s"],
+                  "evidence": [{"book": "三体", "text": "弱小和无知不是生存的障碍"}]}],
+        "themes": [], "signature_quotes": [{"book": "三体", "text": "t", "note": "n"}],
+        "blind_spots": ["缺"],
+    })
+
+    class BothOk:
+        def __init__(self, _cfg):
+            self.seen = []
+
+        async def chat(self, system: str, messages) -> str:
+            self.seen.append(system)
+            if "阅读痕迹分析师" in system:
+                return profile_json
+            return report_json
+
+    holder2 = {}
+    analyzer.create_llm_client = lambda cfg: (holder2.setdefault("c", BothOk(cfg)))
+    try:
+        out2 = asyncio.run(
+            analyzer.generate_report(build_demo_data(), LLMConfig(), "serious")
+        )
+    finally:
+        analyzer.create_llm_client = original
+
+    kp = out2.get("knowledge_profile")
+    check("阶段一成功时画像回填进报告",
+          isinstance(kp, dict) and kp.get("headline") == "一个爱追问机制的人", str(kp)[:160])
+    check("画像带维度", isinstance(kp, dict) and len(kp.get("axes") or []) == 1)
+    seen = holder2.get("c").seen
+    check("阶段二提示词说明了这是第二轮",
+          len(seen) == 2 and "第二轮" in seen[1], f"calls={len(seen)}")
+    profile_txt = analyzer.build_reading_profile(
+        build_demo_data(), knowledge=json.loads(profile_json)
+    )
+    check("阶段二正文含画像小节", "第一阶段 · 知识画像" in profile_txt)
+    check("阶段二正文含书单抽样说明", "参考分类" in profile_txt)
+    check("阶段二正文分类分布标为全量", "全量统计" in profile_txt)
+
+
 def main() -> int:
     print("=" * 56)
     print(" 微信读书 · AI 阅读评价 —— 冒烟测试")
     print("=" * 56)
 
     for fn in (test_open_mode, test_auth_mode, test_session_eviction,
-               test_readme_matches_routes, test_frontend_url_building):
+               test_readme_matches_routes, test_frontend_url_building,
+               test_analyzer_two_stage):
         try:
             fn()
         except Exception as e:  # noqa: BLE001

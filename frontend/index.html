@@ -391,6 +391,26 @@ pre {
 .pick-card .pick-title { font-weight: 600; }
 .pick-card .pick-reason { color: #666; margin-top: 2px; }
 .reco-list { padding-left: 20px; font-size: 13px; color: #444; line-height: 1.8; }
+/* ── 知识画像（第一阶段：只读用户留下的痕迹）── */
+.kp-box {
+  background: #f6f8ff; border: 1px solid #e3e8f5; border-radius: 10px;
+  padding: 12px 14px; margin: 14px 0;
+}
+.kp-note { font-size: 12px; color: #888; margin-bottom: 8px; line-height: 1.6; }
+.kp-headline {
+  font-size: 15px; font-weight: 600; color: #3b4470; line-height: 1.6;
+  padding: 8px 10px; background: #fff; border-left: 3px solid #667eea; border-radius: 4px;
+}
+.kp-axes { display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 8px; }
+.kp-axis { display: flex; gap: 8px; align-items: baseline; font-size: 13px; line-height: 1.6; }
+.kp-axis-name { flex: 0 0 92px; font-weight: 600; color: #4a4a6a; }
+.kp-axis-line { color: #555; }
+.kp-sub { font-size: 12px; color: #888; margin: 10px 0 4px; }
+.kp-quote {
+  background: #fff; border-left: 3px solid #c7cee8; border-radius: 4px;
+  padding: 6px 10px; margin: 4px 0; font-size: 13px; color: #444; line-height: 1.7;
+}
+.kp-quote-src { font-size: 12px; color: #999; margin-top: 2px; }
 .report-footer { text-align: center; font-size: 12px; color: #aaa; margin-top: 20px; padding-top: 12px; border-top: 1px solid #eee; }
 .hidden { display: none !important; }
 .mt-8 { margin-top: 8px; }
@@ -1627,9 +1647,11 @@ async function refreshEstimate() {
     el.innerHTML =
       '<span>送进 AI：<span class="num">' + d.tokens.toLocaleString()
       + '</span> tokens</span>'
+      + '<span>① 读痕迹 ' + (d.stage1_tokens || 0).toLocaleString()
+      + ' ＋ ② 出报告 ' + (d.stage2_tokens || 0).toLocaleString() + '</span>'
       + '<span>' + d.chars.toLocaleString() + ' 字符 · ' + d.books + ' 本书</span>'
       + saved
-      + '<span style="color:#888;">（粗估 ±30%，仅用于比较方案量级）</span>';
+      + '<span style="color:#888;">（两阶段粗估 ±30%，仅用于比较方案量级）</span>';
   } catch (e) {
     el.className = 'cf-estimate loading';
     el.textContent = '暂无数据';
@@ -2239,6 +2261,47 @@ function renderAiReport(report) {
 
   if (report.summary) {
     html += '<div class="summary-text">' + escapeHtml(report.summary).replace(/\n/g, '<br>') + '</div>';
+  }
+
+  // 知识画像：先单独读一遍用户留下的痕迹，再拿去和书目结构对照
+  var kp = report.knowledge_profile;
+  if (kp && (kp.headline || (kp.axes && kp.axes.length))) {
+    html += '<div class="kp-box">';
+    html += '<h3>🧠 你的知识画像</h3>';
+    html += '<div class="kp-note">先把你划过的线、写过的想法和书评单独读了一遍，'
+      + '再拿这个结论去和你的书目结构对照。</div>';
+    if (kp.headline) {
+      html += '<div class="kp-headline">' + escapeHtml(kp.headline) + '</div>';
+    }
+    if (kp.axes && kp.axes.length) {
+      html += '<div class="kp-axes">';
+      kp.axes.forEach(function(a) {
+        html += '<div class="kp-axis"><span class="kp-axis-name">'
+          + escapeHtml(a.name || '') + '</span><span class="kp-axis-line">'
+          + escapeHtml(a.line || '') + '</span></div>';
+      });
+      html += '</div>';
+    }
+    if (kp.signature_quotes && kp.signature_quotes.length) {
+      html += '<div class="kp-sub">代表性的原话</div>';
+      kp.signature_quotes.forEach(function(q) {
+        html += '<div class="kp-quote">「' + escapeHtml(q.text || '') + '」'
+          + '<div class="kp-quote-src">— 《' + escapeHtml(q.book || '?') + '》'
+          + (q.note ? '　' + escapeHtml(q.note) : '') + '</div></div>';
+      });
+    }
+    if (kp.blind_spots && kp.blind_spots.length) {
+      html += '<div class="kp-sub">证据缺口</div><div class="tag-list">';
+      kp.blind_spots.forEach(function(s) {
+        html += '<span class="tag red">' + escapeHtml(s) + '</span>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+  if (report.profile_note) {
+    html += '<div class="kp-note">🪄 第二轮补充：'
+      + escapeHtml(report.profile_note) + '</div>';
   }
 
   // Dimensions

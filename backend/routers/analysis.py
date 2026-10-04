@@ -9,7 +9,12 @@ from dataclasses import dataclass, field
 from stdhttp import App, HTTPError, Raw, SSE
 from stdmodel import Model
 
-from services.analyzer import build_reading_profile, estimate_tokens, generate_report
+from services.analyzer import (
+    build_reading_profile,
+    estimate_prompt_sizes,
+    estimate_tokens,
+    generate_report,
+)
 from services.llm import LLMConfig, LLMMessage, create_llm_client
 from services.search import PROVIDERS, SearchConfig, build_queries, search
 from store import store
@@ -63,11 +68,17 @@ async def estimate_payload(uid: str):
     if not data:
         raise HTTPError(status_code=404, detail="data not ready")
 
-    text = build_reading_profile(data)
+    # 两阶段：阶段一读痕迹（知识画像），阶段二读书目 + 画像（最终报告）
+    sizes = estimate_prompt_sizes(data)
     cf = sess.get("content_filter", {})
     return {
-        "chars": len(text),
-        "tokens": estimate_tokens(text),
+        "chars": sizes["chars"],
+        "tokens": sizes["tokens"],
+        # 前端要把两轮分别显示出来，否则用户会以为"省 token"开关失效了
+        "stage1_tokens": sizes["stage1_tokens"],
+        "stage2_tokens": sizes["stage2_tokens"],
+        "traces_chars": sizes["traces_chars"],
+        "profile_chars": sizes["profile_chars"],
         "books": len(data.get("books", [])),
         "kept": {
             "bookmarks": cf.get("keepBookmarks", True),
@@ -81,7 +92,8 @@ async def estimate_payload(uid: str):
             "bookReviews": data["stats"]["totalBookReviews"],
             "ratedBooks": data["stats"].get("ratedBooks", 0),
         },
-        "note": "CJK 按 1 token/字、其余按 4 字符/token 粗估，不确定度约 ±30%",
+        "note": "两阶段之和：① 读划线/想法/书评出知识画像 ② 画像+书单出报告。"
+                "CJK 按 1 token/字、其余按 4 字符/token 粗估，不确定度约 ±30%",
     }
 
 
