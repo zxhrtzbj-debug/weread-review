@@ -45,4 +45,30 @@ if (missing.length) {
   process.exit(1);
 }
 console.log(`id 引用检查: OK（${refs.size} 个引用，${ids.size} 个节点）`);
+
+// 第三条：querySelector(All)('.cls') 用到的 class 必须在 HTML 里真实存在。
+// 来历：两个「一键体验」按钮原先用同一个 id，只有第一个绑得上；改成按 class
+// 绑定后，有人把按钮上的 class 又改回 id —— 选择器静默匹配到 0 个元素，
+// 两个按钮一起失灵，而 id 引用检查看不见（没人再按 id 取它了）。
+const classes = new Set();
+const classRe = /\bclass="([^"]*)"/g;
+while ((m = classRe.exec(html)) !== null) {
+  m[1].split(/\s+/).forEach((c) => c && classes.add(c));
+}
+
+const selRefs = new Set();
+const selRe = /querySelector(?:All)?\(\s*'\.([\w-]+)'\s*\)/g;
+for (const body of scriptBodies) {
+  selRe.lastIndex = 0;
+  let r;
+  while ((r = selRe.exec(body)) !== null) selRefs.add(r[1]);
+}
+
+const missingCls = [...selRefs].filter((c) => !classes.has(c));
+if (missingCls.length) {
+  console.log(`\n选择器引用了 ${missingCls.length} 个 HTML 里没有的 class：`);
+  missingCls.forEach((c) => console.log(`  - .${c}`));
+  process.exit(1);
+}
+console.log(`class 选择器检查: OK（${selRefs.size} 个选择器）`);
 process.exit(failed ? 1 : 0);

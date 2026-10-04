@@ -1,4 +1,4 @@
-"""数据路由：提取（SSE 进度）、时间筛选、内容筛选、删除、示例数据。"""
+"""数据路由：扫描时间线、提取（SSE 进度）、内容筛选、删除、示例数据。"""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from stdhttp import App, HTTPError, Raw, SSE
 from stdmodel import Model
 
-from config import FILTER_TIMEOUT, LOCAL_PICK_SLOTS
+from config import LOCAL_PICK_SLOTS
 from services.demo import build_demo_data
-from services.weread import extract_all_data, preflight
+from services.weread import extract_all_data, preflight, scan_books
 from store import store
 
 router = App(prefix="/api")
@@ -37,9 +37,23 @@ class ContentFilterInput(Model):
 @dataclass
 class ExtractInput(Model):
     mode: str | None = None  # "full" | "book_reviews"
+    # 时间范围筛选（前端「时间范围」步骤确认后随提取一起提交）。
+    # 三个字段要么全有（按筛选提取），要么全没有（全量提取）。
+    startDate: float | None = None
+    endDate: float | None = None
+    excludedBookIds: list | None = None
 
     def normalized(self) -> str:
         return "book_reviews" if (self.mode or "full") == "book_reviews" else "full"
+
+    def filter_payload(self) -> dict | None:
+        if self.startDate is None or self.endDate is None:
+            return None
+        return {
+            "startDate": self.startDate,
+            "endDate": self.endDate,
+            "excludedBookIds": self.excludedBookIds or [],
+        }
 
 
 @dataclass
@@ -79,14 +93,40 @@ async def data_status(uid: str):
         "progress": progress,
         "booksDone": len(sess.get("pending_books") or []),
         "hasData": bool(sess.get("data")),
-        "filterDone": bool(sess.get("extract_filter_done")),
-        "waitingFilter": progress.get("phase") == "filtering",
         "serverTime": int(time.time()),
     }
 
 
+@router.post("/data/scan/{uid}")
+async def data_scan(uid: str):
+    """扫描书单 + 阅读时间线（不逐本抓内容），给「时间范围」步骤提供数据。
+
+    扫描结果（books_raw / shelf_bookmarks）留在会话里，用户确认筛选后
+    /data/extract 直接复用，书单接口不用打第二遍。
+    """
+    sess = store.get(uid)
+    if not sess:
+        raise HTTPError(status_code=404, detail="session not found")
+    if not sess.get("cookies"):
+        raise HTTPError(status_code=400, detail="no cookies, login first")
+    if sess.get("extracting"):
+        raise HTTPError(status_code=409, detail="extracting, try later")
+    try:
+        books_raw, shelf_bookmarks, timeline, cookies = await scan_books(sess["cookies"])
+    except Exception as e:  # noqa: BLE001 - 扫描失败要变成明确的前端提示
+        traceback.print_exc()
+        raise HTTPError(status_code=502, detail=f"扫描失败: {e}") from e
+    sess["cookies"] = cookies  # refresh_cookies 可能轮换过登录态
+    sess["scan_books_raw"] = books_raw
+    sess["scan_shelf"] = shelf_bookmarks
+    return {"books": timeline, "total": len(books_raw)}
+
+
 @router.post("/data/extract/{uid}")
 async def extract_data(uid: str, body: ExtractInput | None = None):
+    """开始提取。带时间筛选字段 → 复用 /data/scan 的预取结果按筛选提取；
+    不带 → 全量提取。没有任何"等待前端再确认"的中间态。
+    """
     sess = store.get(uid)
     if not sess:
         raise HTTPError(status_code=404, detail="session not found")
@@ -96,6 +136,14 @@ async def extract_data(uid: str, body: ExtractInput | None = None):
         raise HTTPError(status_code=409, detail="already extracting")
 
     mode = body.normalized() if body else "full"
+    filter_data = body.filter_payload() if body else None
+    prefetched = None
+    if filter_data is not None:
+        # 筛选面板的数据来自 scan；没有扫描结果就说明前端流程被绕过了
+        if sess.get("scan_books_raw") is None:
+            raise HTTPError(status_code=400, detail="请先扫描阅读时间线再做时间筛选")
+        prefetched = (sess["scan_books_raw"], sess.get("scan_shelf") or {})
+
     sess["extract_mode"] = mode
     sess["extracting"] = True
     sess["data"] = None
@@ -107,10 +155,6 @@ async def extract_data(uid: str, body: ExtractInput | None = None):
     sess["pending_books"] = []
     sess["notebooks_meta"] = None
     sess["_notebooks_sent"] = False
-    sess["timeline"] = None
-    sess["_timeline_sent"] = False
-    sess["extract_filter"] = None
-    sess["extract_filter_done"] = False
 
     async def extract_task():
         try:
@@ -128,26 +172,10 @@ async def extract_data(uid: str, body: ExtractInput | None = None):
                     book_data = kwargs["book_data"]
                     book_data["_index"] = current - 1
                     sess["pending_books"].append(book_data)
-                if "timeline_data" in kwargs:
-                    sess["timeline"] = kwargs["timeline_data"]
-                    sess["_timeline_sent"] = False
-
-            async def get_filter():
-                sess["progress"] = {
-                    "phase": "filtering", "current": 0, "total": 0,
-                    "book_title": "请选择时间范围筛选书籍",
-                }
-                deadline = time.monotonic() + FILTER_TIMEOUT
-                while time.monotonic() < deadline:
-                    if sess.get("extract_filter"):
-                        sess["extract_filter_done"] = True
-                        return sess.pop("extract_filter")
-                    await asyncio.sleep(0.5)
-                return None
 
             sess["data"] = await extract_all_data(
                 sess["cookies"], progress_callback,
-                get_filter=get_filter, mode=mode,
+                mode=mode, prefetched=prefetched, filter_data=filter_data,
             )
         except Exception as e:
             sess["progress"] = {"phase": "error", "message": str(e)}
@@ -157,17 +185,6 @@ async def extract_data(uid: str, body: ExtractInput | None = None):
 
     asyncio.create_task(extract_task())
     return {"status": "started"}
-
-
-@router.post("/data/set-filter/{uid}")
-async def set_extract_filter(uid: str, body: dict):
-    sess = store.get(uid)
-    if not sess:
-        raise HTTPError(status_code=404, detail="session not found")
-    if sess.get("extract_filter_done"):
-        raise HTTPError(status_code=400, detail="filter already received or timed out")
-    sess["extract_filter"] = body
-    return {"status": "ok"}
 
 
 @router.get("/data/progress/{uid}")
@@ -186,31 +203,19 @@ async def data_progress(uid: str):
             data = sess.get("data")
             extracting = sess.get("extracting", False)
 
-            # 1. 时间线（书架扫描后发一次）
-            timeline = sess.get("timeline")
-            if timeline and not sess.get("_timeline_sent"):
-                sess["_timeline_sent"] = True
-                yield _sse({"status": "timeline", "books": timeline})
-
-            # 2. 挂起等前端筛选，保持 SSE 存活
-            if progress.get("phase") == "filtering":
-                yield _sse({"status": "filtering", **progress})
-                await asyncio.sleep(0.5)
-                continue
-
-            # 3. 空结果
+            # 1. 空结果（时间筛选后一本书都不剩）
             if progress.get("phase") == "empty":
                 yield _sse({"status": "empty", "message": progress.get("message", "")})
                 return
 
-            # 4. 书单（筛选后发一次）
+            # 2. 书单（开始逐本抓取前发一次）
             notebooks_meta = sess.get("notebooks_meta")
             if notebooks_meta and not sess.get("_notebooks_sent"):
                 sess["_notebooks_sent"] = True
                 yield _sse({"status": "notebooks", "books": notebooks_meta})
                 continue
 
-            # 5. 逐本增量下发
+            # 3. 逐本增量下发
             pending = sess.get("pending_books", [])
             if pending:
                 to_send = list(pending)
@@ -222,12 +227,12 @@ async def data_progress(uid: str):
                     "total": progress.get("total"),
                 })
 
-            # 6. 错误
+            # 4. 错误
             if progress.get("phase") == "error":
                 yield _sse({"status": "error", "message": progress.get("message", "")})
                 return
 
-            # 7. 完成
+            # 5. 完成
             if data:
                 yield _sse({
                     "status": "complete",
@@ -236,7 +241,7 @@ async def data_progress(uid: str):
                 })
                 return
 
-            # 8. 进行中：带elapsed 与进度，前端据此显示"正在提取"而不是静默
+            # 6. 进行中：带elapsed 与进度，前端据此显示"正在提取"而不是静默
             if progress:
                 yield _sse({
                     "status": "working",
@@ -281,27 +286,43 @@ async def restore_book(uid: str, body: dict):
 
 @dataclass
 class SourceOverrideInput(Model):
-    """人工改判来源：source = "weread" | "local" | null（null 撤销改判）。"""
+    """人工改判来源：source = "weread" | "local" | null（null 撤销改判）。
+
+    bookId 改判一本，bookIds 批量改判。批量是为了"有评分的书必然是上架书籍"
+    这类一眼可辨的误判：几千本里挑出来的一批，一本本点不现实。
+    """
     bookId: str = ""
+    bookIds: list = field(default_factory=list)
     source: str | None = None
 
 
 @router.post("/data/source-override/{uid}")
 async def set_source_override(uid: str, body: SourceOverrideInput):
-    """把某本书在「上架书籍 / 本地上传文件」之间手动改判。
+    """把书在「上架书籍 / 本地上传文件」之间手动改判，支持批量。
 
-    自动判定按元数据缺失度打分，冷门书偶尔会被误判成本地文件而从书单消失。
-    这个端点就是那个出口：改回 "weread" 即可放回书单。
+    自动判定按证据强度定案，证据不足时一律按上架书籍收录，
+    所以真正需要手工改判的是反方向：把混进书单的本地文件移出去。
     """
     sess = store.get(uid)
     if not sess:
         raise HTTPError(status_code=404, detail="session not found")
-    if not body.bookId:
-        raise HTTPError(status_code=400, detail="bookId required")
     if body.source not in ("weread", "local", None):
         raise HTTPError(status_code=400, detail='source must be "weread", "local" or null')
-    overrides = store.set_source_override(sess, body.bookId, body.source)
-    return {"status": "ok", "overrides": overrides}
+
+    ids: list[str] = []
+    if body.bookId:
+        ids.append(str(body.bookId))
+    for raw in body.bookIds or []:
+        sid = str(raw)
+        if sid and sid not in ids:
+            ids.append(sid)
+    if not ids:
+        raise HTTPError(status_code=400, detail="bookId or bookIds required")
+
+    overrides = {}
+    for bid in ids:
+        overrides = store.set_source_override(sess, bid, body.source)
+    return {"status": "ok", "overrides": overrides, "changed": len(ids)}
 
 
 @router.get("/data/local-picks/{uid}")

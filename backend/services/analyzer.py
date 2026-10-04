@@ -34,8 +34,39 @@ from __future__ import annotations
 import json
 import re
 
+from config import UNRECOGNIZED_CATEGORY
 from services.llm import LLMConfig, LLMMessage, create_llm_client
 from services.search import SearchConfig, enrich_books
+
+
+# ── 分类口径 ──────────────────────────────────────────
+#
+# 导出时总有一部分书拿不到平台分类（详情没取回来，或平台本来就没给这个字段）。
+# 这些书统一记作「未识别」，作为一个独立分类参与统计与配额抽样，与真实分类对齐。
+# 这个名字描述的是导出程序这一次的结果，不是这些书的题材——
+# 数据说明书里会向模型讲明这一点，否则它会把「未识别」当成一种阅读取向。
+# 常量本身定义在 config.py（采集端与统计端共用同一个名字）。
+
+
+def _cat_of(b: dict) -> str:
+    """一本书的分类名；取不到的书归入「未识别」。"""
+    return (b.get("category") or "").strip() or UNRECOGNIZED_CATEGORY
+
+
+def _norm_books(books: list) -> list:
+    """把空分类补成「未识别」（返回新列表，不动传入的 dict）。
+
+    本地上传文件不在平台分类体系里，它们的分类空着是应该的，不补。
+    """
+    out = []
+    for b in books or []:
+        if (b.get("category") or "").strip() or b.get("source") == "local":
+            out.append(b)
+        else:
+            c = dict(b)
+            c["category"] = UNRECOGNIZED_CATEGORY
+            out.append(c)
+    return out
 
 
 # ── 抽样与预算参数 ──────────────────────────────────────
@@ -164,7 +195,15 @@ _SYSTEM_BRIEF = """════ 数据说明书（开始分析前，请先把这
 清单里各分类的本数由这条规则决定；用户真实的分类分布写在「分类分布」那一节，
 那是全量统计，谈分类占比时以它为准。
 
-三、「详细样本」是怎么挑出来的
+三、分类「未识别」说的是这一次导出没取到分类
+
+有一部分书在导出时没拿到平台分类，清单与「分类分布」里统一记作「未识别」。
+这个标记描述的是导出程序这一次的结果：这些书的分类信息没有被取回来。
+它和真实分类并列出现在统计与抽样里——配额分组、分类覆盖、清单里的方括号
+都算它一份，其他分类怎么被对待，它就怎么被对待。
+这些书属于什么题材，看书名、作者和它们自己留下的痕迹。
+
+四、「详细样本」是怎么挑出来的
 
 样本按下列顺序各取若干本，同一本书被前面的组占用就顺延到下一本，总量上限
 {sample_limit} 本：
@@ -175,7 +214,7 @@ _SYSTEM_BRIEF = """════ 数据说明书（开始分析前，请先把这
 总条数，M 是这一节实际印出的条数，受每本 {bm_cap} 条、每条 {bm_chars} 字的
 展示上限截断。样本之外还有哪些书，看「书籍清单」。
 
-四、划线 / 想法 / 书评是三种各自独立的内容
+五、划线 / 想法 / 书评是三种各自独立的内容
 
 一本书只要留下其中任意一种就进入这份数据：它可能只因为打过分或写过书评而
 出现在书单里，一条划线也没有。划线只是三种内容中的一种，用户导出时可以选择
@@ -183,7 +222,7 @@ _SYSTEM_BRIEF = """════ 数据说明书（开始分析前，请先把这
 上传的本地文件加进来。每本书下面有什么就谈什么：这一节里有想法就谈想法，
 有划线就谈划线。
 
-五、你的任务
+六、你的任务
 
 这份数据里信息密度是这样排的：
   1. 用户自己写下的文字：想法、书评、划线旁的批注
@@ -331,7 +370,7 @@ def _book_list_line(b: dict) -> str:
     return (
         f"[社区 {rate_txt}｜我的评价 {_star_str(my)}] "
         f"《{b.get('title', '')}》 - {b.get('author') or '?'}"
-        f"  [{b.get('category') or '?'}]"
+        f"  [{_cat_of(b)}]"
     )
 
 
@@ -408,7 +447,8 @@ def sample_shelf_list(books: list) -> tuple[list, dict]:
 
     groups: dict[str, list] = {}
     for b in books:
-        groups.setdefault(b.get("category") or "未分类", []).append(b)
+        # 「未识别」是一个独立分组：它参与配额，与真实分类同等对待
+        groups.setdefault(_cat_of(b), []).append(b)
 
     if len(groups) <= 1:
         return list(books), {
@@ -488,7 +528,7 @@ def build_traces_view(data: dict) -> str:
       · 这里按痕迹量排序取前面的书，而不是取评分极端——极端评分是为了暴露
         品味差异，但那会带进一堆没留下几个字的书，稀释痕迹。
     """
-    books = data.get("books", [])
+    books = _norm_books(data.get("books", []))
     has_bm, has_rv, has_br = _content_flags(books)
     if not (has_bm or has_rv or has_br):
         return ""
@@ -625,7 +665,7 @@ def build_reading_profile(
     而不是写"不要把这份数字当成真实分布"。
     """
     stats = data.get("stats", {})
-    books = data.get("books", [])
+    books = _norm_books(data.get("books", []))
     has_bm, has_rv, has_br = _content_flags(books)
 
     lines = ["=== 阅读概况（全量统计，覆盖本次纳入的全部书籍）==="]
@@ -798,7 +838,8 @@ def _render_book_detail(
         out.append(f"  用户对这本书的介绍与感悟: {b['userNote']}")
 
     author = b.get("author") or "?"
-    category = b.get("category") or "?"
+    # 本地上传文件不在平台分类体系里，写「未识别」会让模型以为这次提取失败了
+    category = "本地上传文件" if b.get("source") == "local" else _cat_of(b)
     out.append(f"  作者: {author} ｜ 分类: {category}")
 
     rating = b.get("rating", 0) or 0
@@ -955,8 +996,10 @@ def _sample_books(books: list) -> list[tuple[dict, str]]:
     for b in valid:
         if len(out) >= _SAMPLE_LIMIT:
             break
-        cat = b.get("category", "")
-        if cat and cat not in seen_cats and b.get("bookId") not in taken:
+        if b.get("source") == "local":
+            continue
+        cat = _cat_of(b)
+        if cat not in seen_cats and b.get("bookId") not in taken:
             seen_cats.add(cat)
             taken[b["bookId"]] = "分类覆盖"
             out.append((b, "分类覆盖"))

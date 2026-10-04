@@ -22,7 +22,13 @@ import uuid
 from collections import Counter
 from copy import deepcopy
 
-from config import DEFAULT_CONTENT_FILTER, LOCAL_PICK_SLOTS, MAX_SESSIONS, SESSION_TTL
+from config import (
+    DEFAULT_CONTENT_FILTER,
+    LOCAL_PICK_SLOTS,
+    MAX_SESSIONS,
+    SESSION_TTL,
+    UNRECOGNIZED_CATEGORY,
+)
 from services.llm import LLMConfig
 
 
@@ -60,10 +66,10 @@ class SessionStore:
             "pending_books": [],
             "notebooks_meta": None,
             "_notebooks_sent": False,
-            "timeline": None,
-            "_timeline_sent": False,
-            "extract_filter": None,
-            "extract_filter_done": False,
+            # /api/data/scan 的预取结果：确认时间筛选后提取直接复用，
+            # 书单接口不用打第二遍。
+            "scan_books_raw": None,
+            "scan_shelf": None,
             # 审核阶段
             "deleted_book_ids": [],
             "content_filter": _empty_content_filter(),
@@ -271,7 +277,11 @@ def _local_file_view(book: dict) -> dict:
         "title": book.get("title") or "（无标题）",
         "author": book.get("author") or "",
         "sourceSignals": book.get("sourceSignals") or [],
+        "sourceConfidence": book.get("sourceConfidence") or "high",
+        # 评分是"这必然是上架书籍"的硬证据：误判进这个面板的书多半带着评分，
+        # 前端据此把一眼可辨的误伤挑出来，供用户批量放回书单。
         "myRating": book.get("myRating"),
+        "rating": book.get("rating") or 0,
         "totalBookmarks": book.get("totalBookmarks", 0),
         "totalReviews": book.get("totalReviews", 0),
         "totalBookReviews": book.get("totalBookReviews", 0),
@@ -317,7 +327,10 @@ def _apply_content_filter(book: dict, cf: dict) -> dict:
 
 
 def _recompute_stats(books: list[dict], local_total: int = 0) -> dict:
-    categories = Counter(b.get("category", "") for b in books if b.get("category"))
+    categories = Counter(
+        (b.get("category") or "").strip() or UNRECOGNIZED_CATEGORY
+        for b in books if b.get("source") != "local"
+    )
     authors = Counter(b.get("author", "") for b in books if b.get("author"))
     rated = [b.get("myRating") for b in books if b.get("myRating") is not None]
     return {
@@ -328,6 +341,9 @@ def _recompute_stats(books: list[dict], local_total: int = 0) -> dict:
         # 全部本地文件数（含未被选中的）—— 前端要显示"还有 N 本没归类"
         "localFiles": local_total,
         "localPicked": sum(1 for b in books if b.get("userSlot")),
+        "uncertainBooks": sum(
+            1 for b in books if b.get("sourceConfidence") == "low"
+        ),
         "ratedBooks": len(rated),
         "avgMyRating": round(sum(rated) / len(rated), 2) if rated else 0,
         "topCategories": categories.most_common(10),

@@ -187,6 +187,19 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .filter-select-all { display: flex; gap: 12px; align-items: center; margin: 8px 0; font-size: 13px; color: #666; }
 .filter-select-all label { cursor: pointer; display: flex; align-items: center; gap: 4px; }
 
+/* ── 是/否选择弹层（点「开始提取」后弹出）── */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.modal-mask.hidden { display: none; }
+.modal-card {
+  background: #fff; border-radius: 10px; padding: 24px 26px;
+  max-width: 440px; width: calc(100% - 48px);
+  box-shadow: 0 10px 34px rgba(0,0,0,0.2);
+}
+.modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+
 /* ── Book Cards ── */
 .book-card {
   border: 1px solid #eee; border-radius: 6px; padding: 12px; margin-bottom: 8px;
@@ -313,6 +326,40 @@ pre {
   display: inline-block; font-size: 11px; background: #fff3cd; color: #856404;
   border-radius: 10px; padding: 1px 8px; margin-left: 6px;
 }
+/* 证据不足、按上架书籍收录的：进得了书单，但值得让人复核一眼 */
+.uncertain-badge {
+  display: inline-block; font-size: 11px; background: #f1f3f5; color: #6c757d;
+  border-radius: 10px; padding: 1px 8px; margin-left: 6px;
+}
+
+/* ── 折叠列表的翻页控件（本地文件面板 / 书单共用）── */
+.pg-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.pg-tools .pg-spacer { flex: 1; }
+.pg-search {
+  padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px;
+  font-size: 13px; width: 230px; font-family: inherit;
+}
+.pg-search:focus { border-color: #07c160; outline: none; }
+.pager {
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  font-size: 12px; color: #666; margin: 8px 0;
+}
+.pager .pg-info { color: #888; }
+.pager .pg-info b { color: #333; }
+.pager button {
+  background: #fff; border: 1px solid #ddd; color: #555; cursor: pointer;
+  font-size: 12px; padding: 4px 10px; border-radius: 4px;
+}
+.pager button:hover:not(:disabled) { border-color: #07c160; color: #07c160; }
+.pager button:disabled { opacity: .45; cursor: default; }
+.pager .pg-jump { display: flex; gap: 4px; align-items: center; }
+.pager .pg-jump input {
+  width: 52px; padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px;
+  font-size: 12px; text-align: center;
+}
+.bl-title { font-size: 14px; font-weight: 600; color: #333; }
+.bl-count { font-size: 12px; color: #888; }
+.pg-empty { font-size: 13px; color: #999; padding: 12px 2px; }
 
 /* ── Search panel (step 5) ── */
 .search-panel {
@@ -446,18 +493,22 @@ pre {
   </div>
   <div class="step-item" data-step="3">
     <div class="step-number">3</div>
-    <div class="step-label">提取筛选</div>
+    <div class="step-label">时间范围</div>
   </div>
   <div class="step-item" data-step="4">
     <div class="step-number">4</div>
-    <div class="step-label">审核删除</div>
+    <div class="step-label">提取数据</div>
   </div>
   <div class="step-item" data-step="5">
     <div class="step-number">5</div>
-    <div class="step-label">AI 评价</div>
+    <div class="step-label">审核删除</div>
   </div>
   <div class="step-item" data-step="6">
     <div class="step-number">6</div>
+    <div class="step-label">AI 评价</div>
+  </div>
+  <div class="step-item" data-step="7">
+    <div class="step-number">7</div>
     <div class="step-label">查看报告</div>
   </div>
 </div>
@@ -495,7 +546,7 @@ pre {
   </div>
 
   <div style="text-align:center;margin-top:14px;border-top:1px solid #eee;padding-top:14px;">
-    <button id="demo-btn" class="btn-outline btn-nav">🧪 一键体验（示例数据，跳过扫码）</button>
+    <button class="demo-btn btn-outline btn-nav">🧪 一键体验（示例数据，跳过扫码）</button>
     <div style="font-size:12px;color:#999;margin-top:6px;">
       不想登录微信读书？直接灌入示例书单，跑通「审核 → 内容筛选 → AI 评价 → 报告」全流程
     </div>
@@ -512,7 +563,7 @@ pre {
   <div style="text-align:center;">
     <button id="start-btn" style="font-size:16px;padding:12px 32px;">📱 扫码登录</button>
     <div style="margin-top:12px;">
-      <button id="demo-btn" class="btn-outline btn-nav">🧪 一键体验（示例数据，跳过登录）</button>
+      <button class="demo-btn btn-outline btn-nav">🧪 一键体验（示例数据，跳过登录）</button>
       <div style="font-size:12px;color:#999;margin-top:6px;">
         不想扫码？直接灌入一份示例书单，跑通「审核 → 筛选 → 评价 → 报告」全流程
       </div>
@@ -533,11 +584,50 @@ pre {
 </div>
 
 <!-- ═══════════════════════════════════════ -->
-<!-- Step 3: Extract & Filter               -->
+<!-- Step 3: Time Range (optional)          -->
 <!-- ═══════════════════════════════════════ -->
 <div class="card step-panel hidden" id="step-3">
-  <h2><span class="step-badge">3</span> 提取阅读数据</h2>
-  <p class="card-desc">从微信读书提取你有笔记的书籍，然后选择时间范围和书籍用于 AI 评价。</p>
+  <h2><span class="step-badge">3</span> 时间范围</h2>
+  <p class="card-desc">按最近阅读时间挑选要提取的书籍。只有这里选中的书会进入提取；其余书本次不抓。</p>
+
+  <!-- 时间线没扫出来时的明确出口：不偷偷降级，由用户自己决定 -->
+  <div id="scan-empty" class="hidden">
+    <p style="font-size:13px;color:#666;">
+      ⚠️ 没有读到你的阅读时间线（书架接口未返回最近阅读时间），无法按时间范围挑选。
+    </p>
+    <div class="flex" style="gap:10px;margin-top:8px;">
+      <button id="scan-empty-extract-btn" class="btn-nav next">改为直接提取全部 →</button>
+      <button class="btn-outline btn-nav" onclick="goStep(4)">← 返回提取设置</button>
+    </div>
+  </div>
+
+  <!-- Timeline Filter (scan 成功后展示) -->
+  <div id="filter-area" class="hidden">
+    <div class="filter-dates">
+      <label>起始日期 <input type="date" id="filter-start"></label>
+      <label>结束日期 <input type="date" id="filter-end"></label>
+      <button id="filter-confirm-btn" class="btn-sm" style="background:#07c160;padding:8px 24px;">确认并开始提取</button>
+    </div>
+    <div class="filter-info" id="filter-info"></div>
+    <div class="filter-select-all">
+      <label><input type="checkbox" id="filter-select-all" checked> 全选/取消全选</label>
+      <span id="filter-selected-count" style="color:#999;"></span>
+    </div>
+    <div class="filter-book-list" id="filter-book-list"></div>
+  </div>
+
+  <div class="nav-row">
+    <button class="btn-nav prev" onclick="goStep(4)">← 返回提取设置</button>
+    <div></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ -->
+<!-- Step 4: Extract                        -->
+<!-- ═══════════════════════════════════════ -->
+<div class="card step-panel hidden" id="step-4">
+  <h2><span class="step-badge">4</span> 提取阅读数据</h2>
+  <p class="card-desc">从微信读书提取你有笔记的书籍，用于 AI 评价。点「开始提取」后可以选择是否按时间范围筛选。</p>
 
   <div id="extract-start-area">
     <div class="mode-pick">
@@ -576,26 +666,6 @@ pre {
     <div id="progress-sub" class="progress-sub hidden"></div>
   </div>
 
-  <!-- Timeline Filter (shown after timeline scan) -->
-  <div id="filter-area" class="hidden">
-    <hr class="section-divider">
-    <h3 style="font-size:15px;margin-bottom:8px;">📅 选择时间范围与书籍</h3>
-    <p style="font-size:13px;color:#666;margin-bottom:8px;">
-      选择时间范围筛选，或取消勾选你不希望被评价的书籍。
-    </p>
-    <div class="filter-dates">
-      <label>起始日期 <input type="date" id="filter-start"></label>
-      <label>结束日期 <input type="date" id="filter-end"></label>
-      <button id="filter-confirm-btn" class="btn-sm" style="background:#07c160;padding:8px 24px;">确认并开始导入</button>
-    </div>
-    <div class="filter-info" id="filter-info"></div>
-    <div class="filter-select-all">
-      <label><input type="checkbox" id="filter-select-all" checked> 全选/取消全选</label>
-      <span id="filter-selected-count" style="color:#999;"></span>
-    </div>
-    <div class="filter-book-list" id="filter-book-list"></div>
-  </div>
-
   <div class="nav-row">
     <button class="btn-nav prev" onclick="goStep(2)">← 上一步</button>
     <div></div>
@@ -603,10 +673,10 @@ pre {
 </div>
 
 <!-- ═══════════════════════════════════════ -->
-<!-- Step 4: Review & Delete Books           -->
+<!-- Step 5: Review & Delete Books           -->
 <!-- ═══════════════════════════════════════ -->
-<div class="card step-panel hidden" id="step-4">
-  <h2><span class="step-badge">4</span> 审核书籍</h2>
+<div class="card step-panel hidden" id="step-5">
+  <h2><span class="step-badge">5</span> 审核书籍</h2>
   <p class="card-desc">查看已提取的书籍数据，你可以删除不希望参与评价的书籍，也可以只保留某一类内容以节约 token。</p>
 
   <!-- ── 内容分类筛选 ── -->
@@ -635,45 +705,69 @@ pre {
 
   <!-- ── 本地上传文件：书名常是文件名，默认不进书单，按需选入 ── -->
   <div class="lf-box hidden" id="local-files-box">
-    <div class="lf-head">
-      <span class="lf-title">📁 本地上传文件</span>
-      <span class="lf-count" id="lf-count"></span>
-    </div>
-    <p class="lf-desc">
-      这些是你在微信读书里<b>自己上传的文件</b>（书名往往就是文件名），
-      它们没有分类、没有站内评分，默认<b>不进入书单</b>——否则 AI 会对着一串 PDF 名字编造阅读品味。
-      如果你想让其中几本参与评价，给它们挑一个分类、写一段介绍感悟；
-      这段文字会放在该书的划线与想法<b>前面</b>，作为你本人的态度说明。
-    </p>
-    <div id="lf-rows"></div>
-    <div class="lf-new-slot">
-      <input type="text" id="lf-new-slot-name" placeholder="新增分类，如「通勤读物」">
-      <button class="btn-sm" id="lf-add-slot-btn" style="background:#8a5a00;">＋ 新增分类</button>
-    </div>
-    <div class="lf-actions">
-      <button class="btn-sm" id="lf-save-btn">保存选择</button>
-      <span class="lf-hint" id="lf-hint"></span>
-    </div>
+    <details id="lf-details">
+      <summary>
+        <span class="lf-title">📁 本地上传文件</span>
+        <span class="lf-count" id="lf-count"></span>
+      </summary>
+      <p class="lf-desc">
+        这些是你在微信读书里<b>自己上传的文件</b>（书名往往就是文件名），
+        它们没有分类、没有站内评分，默认<b>不进入书单</b>——否则 AI 会对着一串 PDF 名字编造阅读品味。
+        如果你想让其中几本参与评价，给它们挑一个分类、写一段介绍感悟；
+        这段文字会放在该书的划线与想法<b>前面</b>，作为你本人的态度说明。
+      </p>
+      <div class="pg-tools">
+        <input type="search" id="lf-search" class="pg-search"
+               placeholder="按书名搜索（支持作者名）">
+        <span class="pg-spacer"></span>
+        <button class="btn-sm" id="lf-restore-rated" hidden></button>
+      </div>
+      <div id="lf-pager-top" class="pager"></div>
+      <div id="lf-rows"></div>
+      <div id="lf-pager-bottom" class="pager"></div>
+      <div class="lf-new-slot">
+        <input type="text" id="lf-new-slot-name" placeholder="新增分类，如「通勤读物」">
+        <button class="btn-sm" id="lf-add-slot-btn" style="background:#8a5a00;">＋ 新增分类</button>
+      </div>
+      <div class="lf-actions">
+        <button class="btn-sm" id="lf-save-btn">保存选择</button>
+        <span class="lf-hint" id="lf-hint"></span>
+      </div>
+    </details>
   </div>
 
   <div id="stats-summary"></div>
-  <div id="books-container"></div>
+
+  <!-- ── 书单：同样折叠 + 分页。几千本硬铺开既卡又容易漏看 ── -->
+  <details id="books-details" class="hidden">
+    <summary>
+      <span class="bl-title">📚 书单</span>
+      <span class="bl-count" id="books-count"></span>
+    </summary>
+    <div class="pg-tools">
+      <input type="search" id="books-search" class="pg-search"
+             placeholder="按书名或作者搜索">
+    </div>
+    <div id="books-pager-top" class="pager"></div>
+    <div id="books-container"></div>
+    <div id="books-pager-bottom" class="pager"></div>
+  </details>
   <details class="mt-8">
     <summary>原始 JSON</summary>
     <pre id="raw-json"></pre>
   </details>
 
   <div class="nav-row">
-    <button class="btn-nav prev" onclick="goStep(3)">← 上一步</button>
+    <button class="btn-nav prev" onclick="goStep(4)">← 上一步</button>
     <button class="btn-nav next" id="to-ai-btn" disabled>继续到 AI 评价 →</button>
   </div>
 </div>
 
 <!-- ═══════════════════════════════════════ -->
-<!-- Step 5: AI Evaluation                   -->
+<!-- Step 6: AI Evaluation                   -->
 <!-- ═══════════════════════════════════════ -->
-<div class="card step-panel hidden" id="step-5">
-  <h2><span class="step-badge">5</span> AI 阅读评价</h2>
+<div class="card step-panel hidden" id="step-6">
+  <h2><span class="step-badge">6</span> AI 阅读评价</h2>
   <p class="card-desc">选择评价风格，让 AI 分析你的阅读数据并生成报告。</p>
 
   <div class="style-toggle">
@@ -732,21 +826,36 @@ pre {
   </div>
 
   <div class="nav-row">
-    <button class="btn-nav prev" onclick="goStep(4)">← 上一步</button>
+    <button class="btn-nav prev" onclick="goStep(5)">← 上一步</button>
     <div></div>
   </div>
 </div>
 
 <!-- ═══════════════════════════════════════ -->
-<!-- Step 6: Report                          -->
+<!-- Step 7: Report                          -->
 <!-- ═══════════════════════════════════════ -->
-<div class="card step-panel hidden" id="step-6">
-  <h2><span class="step-badge">6</span> 阅读评价报告</h2>
+<div class="card step-panel hidden" id="step-7">
+  <h2><span class="step-badge">7</span> 阅读评价报告</h2>
   <div id="ai-report"></div>
 
   <div class="nav-row center">
-    <button class="btn-nav prev" onclick="goStep(5)">重新生成</button>
+    <button class="btn-nav prev" onclick="goStep(6)">重新生成</button>
     <button class="btn-outline btn-nav" onclick="resetAll()">🔄 重新开始</button>
+  </div>
+</div>
+
+<!-- 是/否选择层：点「开始提取」后弹出，没有任何静默默认 -->
+<div id="filter-choice-modal" class="modal-mask hidden">
+  <div class="modal-card">
+    <h3 style="font-size:16px;margin-bottom:10px;">📅 要不要按时间范围筛选书籍？</h3>
+    <p style="font-size:13px;color:#666;line-height:1.7;">
+      选「是」会先扫描你的阅读时间线，进入「时间范围」步骤按日期和勾选挑选要提取的书；
+      选「否」直接提取全部有笔记的书籍。
+    </p>
+    <div class="modal-actions">
+      <button id="choice-yes-btn" class="btn-nav next" style="flex:1;">✅ 是，按时间筛选</button>
+      <button id="choice-no-btn" class="btn-outline btn-nav" style="flex:1;">⏭️ 否，直接提取全部</button>
+    </div>
   </div>
 </div>
 
@@ -823,8 +932,8 @@ function goStep(n) {
 
   // Step-specific side effects
   if (n === 2 && currentUid) {
-    // Already logged in, skip to step 3
-    goStep(3);
+    // Already logged in, skip to extract step
+    goStep(4);
     return;
   }
   if (n === 5) {
@@ -857,15 +966,24 @@ function resetAll() {
 
   hide('qr-area');
   hide('filter-area');
+  hide('scan-empty');
+  hide('filter-choice-modal');
   hide('extract-status');
   hide('ai-status');
-  hide('step-6');
   hide('preflight-box');
   hide('progress-sub');
   hide('local-files-box');
+  hide('books-details');
   localFiles = [];
   localSlots = [];
   localPicks = {};
+  lfPage = 1;
+  lfQuery = '';
+  reviewBooks = [];
+  bookPage = 1;
+  bookQuery = '';
+  if ($('lf-search')) $('lf-search').value = '';
+  if ($('books-search')) $('books-search').value = '';
 
   $('start-btn').disabled = false;
   $('start-btn').textContent = '📱 扫码登录';
@@ -970,7 +1088,7 @@ $('config-save-btn').addEventListener('click', async function() {
     temperature: isNaN(tempVal) ? 0.8 : tempVal,
   };
   if (config.api_key === '') {
-    if (!confirm('未填 API Key，第 5 步的 AI 评价会失败。仍要继续体验其他步骤吗？')) {
+    if (!confirm('未填 API Key，第 6 步的 AI 评价会失败。仍要继续体验其他步骤吗？')) {
       return;
     }
   }
@@ -1039,8 +1157,9 @@ $('start-btn').addEventListener('click', async function() {
   }
 });
 
-// 一键体验：不需要扫码，直接灌示例数据
-$('demo-btn').addEventListener('click', async function() {
+// 一键体验：不需要扫码，直接灌示例数据（第 1、2 步各有一个入口按钮）
+document.querySelectorAll('.demo-btn').forEach(function(demoBtn) {
+demoBtn.addEventListener('click', async function() {
   if (!await checkBackend()) return;
   this.disabled = true;
   this.textContent = '⏳ 载入示例数据...';
@@ -1064,13 +1183,14 @@ $('demo-btn').addEventListener('click', async function() {
     await loadReviewData();
     $('start-btn').textContent = '🧪 示例数据已载入';
     $('start-btn').disabled = true;
-    goStep(4);
+    goStep(5);
   } catch (e) {
     alert('载入示例数据失败: ' + e.message);
   } finally {
     this.disabled = false;
     this.textContent = '🧪 一键体验（示例数据，跳过登录）';
   }
+});
 });
 
 function pollBrowserLogin(sid) {
@@ -1145,7 +1265,7 @@ async function transferCookies(cookies) {
 
     // Also load any server-side config
     await loadLlmConfig();
-    goStep(3);
+    goStep(4);
   } catch (e) {
     $('login-status').innerHTML = '<span class="status-badge error">❌ 获取会话失败: ' + e.message + '</span>';
   }
@@ -1159,7 +1279,7 @@ function formatDateInput(ts) {
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
 
-// ── Step 3: Extract & Filter ──
+// ── Step 4: Extract（是/否选择 → 扫描 → 提取）──
 
 var extractStartedAt = 0;
 var extractPhaseTimer = null;
@@ -1227,16 +1347,78 @@ async function runPreflight() {
   }
 }
 
-$('extract-btn').addEventListener('click', async function() {
+// 点「开始提取」不直接开跑：先弹出 是/否 选择层，由用户决定走哪条流程
+$('extract-btn').addEventListener('click', function() {
   if (!currentUid) return;
-  var btn = this;
+  extractMode = 'full';
+  document.querySelectorAll('input[name=extract-mode]').forEach(function(r) {
+    if (r.checked) extractMode = r.value;
+  });
+  show('filter-choice-modal');
+});
+
+$('choice-no-btn').addEventListener('click', function() {
+  hide('filter-choice-modal');
+  startExtract(null);
+});
+
+$('choice-yes-btn').addEventListener('click', function() {
+  hide('filter-choice-modal');
+  scanTimeline();
+});
+
+// 时间线扫不出来时的明确出口：不偷偷降级，由用户自己决定改为全量
+$('scan-empty-extract-btn').addEventListener('click', function() {
+  hide('scan-empty');
+  goStep(4);
+  startExtract(null);
+});
+
+// 扫描书单 + 阅读时间线（不逐本抓内容），成功后进入「时间范围」步骤
+async function scanTimeline() {
+  var btn = $('extract-btn');
+  show('extract-status');
+  setIndeterminate(true);
+  setProgressText('正在扫描书籍时间线…', '只取书单与最近阅读时间，不抓取内容');
+  btn.disabled = true;
+  btn.textContent = '⏳ 扫描中...';
+  var d;
+  try {
+    var res = await fetch(apiUrl('/api/data/scan/', currentUid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    d = await res.json().catch(function() { return {}; });
+    if (!res.ok) throw new Error(d.detail || ('HTTP ' + res.status));
+  } catch (e) {
+    setIndeterminate(false);
+    setProgressText('❌ 时间线扫描失败：' + e.message, '');
+    btn.disabled = false;
+    btn.textContent = '🔄 重试';
+    return;
+  }
+  setIndeterminate(false);
+  btn.disabled = false;
+  btn.textContent = '🚀 开始提取';
+  setProgressText('✅ 扫描完成：共 ' + (d.total || 0) + ' 本有笔记的书', '');
+  if (d.books && d.books.length) {
+    hide('scan-empty');
+    showTimelineFilter(d.books);
+  } else {
+    // 有笔记但读不到阅读时间：面板渲染不出来，给用户一个明确的岔路口
+    hide('filter-area');
+    show('scan-empty');
+  }
+  goStep(3);
+}
+
+// filter 为 null → 全量提取；否则 {startDate, endDate, excludedBookIds}
+async function startExtract(filter) {
+  var btn = $('extract-btn');
 
   if (progressSource) progressSource.close();
   stopPhaseTimer();
-  filterBooks = [];
-  hide('filter-area');
   hide('extract-status');
-  hide('step-6');
   hide('preflight-box');
 
   btn.disabled = true;
@@ -1248,12 +1430,6 @@ $('extract-btn').addEventListener('click', async function() {
   booksLoaded = 0;
   booksData = {};
 
-  // 模式：全量/ 只取书评
-  extractMode = 'full';
-  document.querySelectorAll('input[name=extract-mode]').forEach(function(r) {
-    if (r.checked) extractMode = r.value;
-  });
-
   show('extract-status');
   $('progress-fill').style.width = '0%';
   setIndeterminate(false);
@@ -1262,28 +1438,38 @@ $('extract-btn').addEventListener('click', async function() {
   extractStartedAt = Date.now();
   startPhaseTimer();
 
-  var ok = await runPreflight();
-  if (!ok) {
-    stopPhaseTimer();
-    setProgressText('❌ 自检未通过，已暂停提取（不会发起抓取）', '');
-    btn.disabled = false;
-    btn.textContent = '🔄 重新自检';
-    return;
+  // 走了「时间范围」流程的话，扫描本身已经验证过网络与登录态，自检跳过
+  if (!filter) {
+    var ok = await runPreflight();
+    if (!ok) {
+      stopPhaseTimer();
+      setProgressText('❌ 自检未通过，已暂停提取（不会发起抓取）', '');
+      btn.disabled = false;
+      btn.textContent = '🔄 重新自检';
+      return;
+    }
   }
 
-  btn.textContent = '⏳ 扫描中...';
-  setProgressText(
-    extractMode === 'book_reviews' ? '正在扫描书评与阅读时间…' : '正在扫描书籍时间线…'
-  );
+  btn.textContent = '⏳ 提取中...';
+  setProgressText(filter
+    ? '正在按所选时间范围提取…'
+    : (extractMode === 'book_reviews' ? '正在扫描书评与阅读时间…' : '正在扫描书籍时间线…'));
+
+  var body = { mode: extractMode };
+  if (filter) {
+    body.startDate = filter.startDate;
+    body.endDate = filter.endDate;
+    body.excludedBookIds = filter.excludedBookIds;
+  }
 
   try {
     var res = await fetch(apiUrl('/api/data/extract/', currentUid), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode: extractMode }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
-      var errData = await res.json();
+      var errData = await res.json().catch(function() { return {}; });
       throw new Error(errData.detail || res.statusText);
     }
   } catch (e) {
@@ -1306,24 +1492,13 @@ $('extract-btn').addEventListener('click', async function() {
     setProgressText('⚠️ 进度连接中断，正在确认后台是否仍在提取…');
     checkExtractAlive();
   };
-});
+}
 
 // SSE 消息处理（重连后复用同一个函数，所以必须是具名声明）
 function handleExtractEvent(event) {
     var d = JSON.parse(event.data);
 
-    if (d.status === 'timeline') {
-      setIndeterminate(false);
-      $('progress-fill').style.width = '0%';
-      setProgressText('✅ 扫描完成，请选择时间范围 (共 ' + d.books.length + ' 本书)', '');
-      showTimelineFilter(d.books);
-
-    } else if (d.status === 'filtering') {
-      setIndeterminate(false);
-      $('progress-fill').style.width = '0%';
-      setProgressText(d.book_title || '请选择时间范围筛选书籍', '等待你确认筛选条件');
-
-    } else if (d.status === 'empty') {
+    if (d.status === 'empty') {
       progressSource.close();
       stopPhaseTimer();
       setIndeterminate(false);
@@ -1369,9 +1544,9 @@ function handleExtractEvent(event) {
       setProgressText('✅ 完成！共 ' + d.bookCount + ' 本书，用时 ' + secs + ' 秒', '');
       $('extract-btn').textContent = '✅ 提取完成';
 
-      // Fetch result and go to step 4
+      // Fetch result and go to review step
       baselineTokens = 0;  // 重新提取，重置 token 基线
-      loadReviewData().then(function() { goStep(4); }).catch(function() {});
+      loadReviewData().then(function() { goStep(5); }).catch(function() {});
 
     } else if (d.status === 'error') {
       progressSource.close();
@@ -1409,7 +1584,7 @@ async function checkExtractAlive() {
       $('progress-fill').style.width = '100%';
       setProgressText('✅ 提取已完成（共 ' + (d.progress.current || '?') + ' 本）', '');
       baselineTokens = 0;
-      loadReviewData().then(function() { goStep(4); }).catch(function() {});
+      loadReviewData().then(function() { goStep(5); }).catch(function() {});
     } else {
       stopPhaseTimer();
       setIndeterminate(false);
@@ -1425,6 +1600,7 @@ async function checkExtractAlive() {
 // ── Timeline Filter UI ──
 
 function showTimelineFilter(books) {
+  if (!books || !books.length) return;  // 空调用会崩在 books[-1] 上，直接拒绝
   filterBooks = books;
   var container = $('filter-book-list');
   container.innerHTML = books.map(function(b) {
@@ -1481,7 +1657,7 @@ $('filter-select-all').addEventListener('change', function() {
   updateFilterSelectedCount();
 });
 
-$('filter-confirm-btn').addEventListener('click', async function() {
+$('filter-confirm-btn').addEventListener('click', function() {
   var startVal = $('filter-start').value;
   var endVal = $('filter-end').value;
   if (!startVal || !endVal) {
@@ -1512,28 +1688,12 @@ $('filter-confirm-btn').addEventListener('click', async function() {
     return;
   }
 
-  this.disabled = true;
-  this.textContent = '⏳ 处理中...';
-  hide('filter-area');
-  setIndeterminate(true);
-  setProgressText('正在导入所选书籍 (' + remaining.length + ' 本)...',
-    extractMode === 'book_reviews' ? '只提取书评模式' : '全量模式');
-
-  try {
-    var res = await fetch(apiUrl('/api/data/set-filter/', currentUid), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ startDate: startDate, endDate: endDate, excludedBookIds: excludedBookIds }),
-    });
-    if (!res.ok) throw new Error(await res.text());
-  } catch (e) {
-    this.disabled = false;
-    this.textContent = '确认并开始导入';
-    alert('提交筛选条件失败: ' + e.message + '\n可能已超时，请重新点击提取。');
-    return;
-  }
+  // 筛选条件随提取请求一起提交，没有"先提交再等后端确认"的中间态
+  goStep(4);
+  startExtract({ startDate: startDate, endDate: endDate, excludedBookIds: excludedBookIds });
 });
 
-// ── Step 4: 数据刷新 + 内容分类筛选 ──
+// ── Step 5: 数据刷新 + 内容分类筛选 ──
 
 const CF_PRESETS = {
   all: {
@@ -1679,9 +1839,54 @@ document.querySelectorAll('.cf-preset').forEach(function(btn) {
 
 // ── 本地上传文件的自选分类 ──
 
+const PAGE_SIZE = 20;
+
+// ── 翻页：两块折叠列表共用 ──────────────────────────
+// 一次铺开几千条既卡又容易漏看，所以两块列表都按 20 条一页走。
+function paginateRows(list, page) {
+  var totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  var p = Math.min(Math.max(1, parseInt(page, 10) || 1), totalPages);
+  var start = (p - 1) * PAGE_SIZE;
+  return {
+    page: p, totalPages: totalPages, start: start,
+    rows: list.slice(start, start + PAGE_SIZE),
+  };
+}
+
+function renderPager(el, pg, total, unit, onGo) {
+  if (!el) return;
+  if (!total) { el.innerHTML = ''; return; }
+  el.innerHTML =
+      '<button data-pg="1"' + (pg.page <= 1 ? ' disabled' : '') + '>« 首页</button>'
+    + '<button data-pg="' + (pg.page - 1) + '"' + (pg.page <= 1 ? ' disabled' : '') + '>← 上一页</button>'
+    + '<span class="pg-info">第 <b>' + (pg.start + 1) + '–'
+    +   Math.min(total, pg.start + pg.rows.length) + '</b> ' + unit
+    +   '，共 <b>' + total + '</b> ' + unit + '（第 ' + pg.page + '/' + pg.totalPages + ' 页）</span>'
+    + '<button data-pg="' + (pg.page + 1) + '"'
+    +   (pg.page >= pg.totalPages ? ' disabled' : '') + '>下一页 →</button>'
+    + '<button data-pg="' + pg.totalPages + '"'
+    +   (pg.page >= pg.totalPages ? ' disabled' : '') + '>末页 »</button>'
+    + '<span class="pg-jump">跳到<input type="number" min="1" max="' + pg.totalPages
+    +   '" value="' + pg.page + '">页</span>';
+
+  el.querySelectorAll('button[data-pg]').forEach(function(b) {
+    b.addEventListener('click', function() { onGo(parseInt(b.dataset.pg, 10)); });
+  });
+  var jump = el.querySelector('.pg-jump input');
+  if (jump) {
+    jump.addEventListener('change', function() {
+      var v = parseInt(jump.value, 10);
+      if (v >= 1 && v <= pg.totalPages) onGo(v);
+      else jump.value = pg.page;
+    });
+  }
+}
+
 let localFiles = [];
 let localSlots = [];
 let localPicks = {};   // {bookId: {slot, note}} —— 含未保存的草稿
+let lfPage = 1;
+let lfQuery = '';
 
 function starText(v) {
   if (v === null || v === undefined) return '';
@@ -1690,18 +1895,36 @@ function starText(v) {
   return '★'.repeat(full) + (half ? '½' : '') + '☆'.repeat(Math.max(0, 5 - full - half));
 }
 
-// 重绘前把界面上未保存的输入收回来，否则用户写了一半的感悟会凭空消失
-function collectLocalPicksDraft() {
-  var draft = {};
-  var rows = document.querySelectorAll('#lf-rows .lf-row');
-  if (!rows.length) return draft;
-  rows.forEach(function(row) {
+// 把界面上未保存的输入收进 localPicks。
+// 分页之后 DOM 里只有当前页，草稿必须活在变量里而不是 DOM 里 ——
+// 否则翻到第 3 页保存，前两页写的东西就凭空没了。
+function syncLfDraft() {
+  document.querySelectorAll('#lf-rows .lf-row').forEach(function(row) {
     var slotEl = row.querySelector('[data-role=slot]');
     var noteEl = row.querySelector('[data-role=note]');
     if (!slotEl || !noteEl) return;
-    draft[row.dataset.bookId] = { slot: slotEl.value, note: noteEl.value };
+    localPicks[row.dataset.bookId] = { slot: slotEl.value, note: noteEl.value };
   });
-  return draft;
+}
+
+function collectLocalPicksDraft() {
+  syncLfDraft();
+  return localPicks;
+}
+
+function lfMatches(f) {
+  var q = (lfQuery || '').trim().toLowerCase();
+  if (!q) return true;
+  return (f.title || '').toLowerCase().indexOf(q) >= 0
+      || (f.author || '').toLowerCase().indexOf(q) >= 0;
+}
+
+// 有评分的书必然是上架书籍：微信读书不给本地上传的文件打分。
+// 存量数据里如果还留着这类误判，一键把它们放回书单，不用一本本点。
+function lfRatedFiles() {
+  return localFiles.filter(function(f) {
+    return (f.myRating !== null && f.myRating !== undefined) || (f.rating || 0) > 0;
+  });
 }
 
 async function loadLocalFiles() {
@@ -1727,44 +1950,74 @@ function renderLocalFiles() {
   Object.keys(localPicks).forEach(function(k) { if (localPicks[k] && localPicks[k].slot) picked++; });
   $('lf-count').textContent = '共 ' + localFiles.length + ' 本，已选入 ' + picked + ' 本';
 
-  $('lf-rows').innerHTML = localFiles.map(function(f) {
-    var pick = localPicks[f.bookId] || { slot: '', note: '' };
-    var opts = ['<option value="">— 不参与评价 —</option>'].concat(localSlots.map(function(s) {
-      return '<option value="' + escapeHtml(s) + '"'
-        + (pick.slot === s ? ' selected' : '') + '>' + escapeHtml(s) + '</option>';
-    })).join('');
+  var ratedBtn = $('lf-restore-rated');
+  if (ratedBtn) {
+    var rated = lfRatedFiles();
+    ratedBtn.hidden = rated.length === 0;
+    if (rated.length) {
+      ratedBtn.textContent = '⭐ 把 ' + rated.length
+        + ' 本有评分的放回书单（有评分必然是上架书籍）';
+    }
+  }
 
-    var counts = '划线 ' + (f.totalBookmarks || 0) + ' 条 ｜ 想法 ' + (f.totalReviews || 0) + ' 条';
-    if (f.totalBookReviews) counts += ' ｜ 书评 ' + f.totalBookReviews + ' 条';
-    var stars = (f.myRating !== null && f.myRating !== undefined)
-      ? '<span class="my-rating">我的评价 ' + starText(f.myRating) + '</span>' : '';
+  var list = localFiles.filter(lfMatches);
+  var pg = paginateRows(list, lfPage);
+  lfPage = pg.page;
 
-    return '<div class="lf-row' + (pick.slot ? ' filled' : '') + '" data-book-id="'
-      + escapeHtml(f.bookId) + '">'
-      + '<div>'
-      +   '<div class="lf-name">' + escapeHtml(f.title) + stars + '</div>'
-      +   '<div class="lf-signals">判定依据：'
-      +     escapeHtml((f.sourceSignals || []).join('、') || '未记录') + '</div>'
-      +   '<div class="lf-counts">' + counts + '</div>'
-      + '</div>'
-      + '<div><label class="lf-slot-label">归类为</label>'
-      +   '<select data-role="slot">' + opts + '</select>'
-      +   '<button class="lf-unsplit" data-book-id="' + escapeHtml(f.bookId) + '">'
-      +     '↩︎ 其实是上架书籍</button></div>'
-      + '<textarea data-role="note" placeholder="写一段你对这本书的介绍与感悟（会放在该书的划线与想法前面）">'
-      +   escapeHtml(pick.note || '') + '</textarea>'
-      + '</div>';
-  }).join('');
+  if (!pg.rows.length) {
+    $('lf-rows').innerHTML = '<div class="pg-empty">没有匹配「'
+      + escapeHtml(lfQuery) + '」的文件</div>';
+  } else {
+    $('lf-rows').innerHTML = pg.rows.map(function(f) {
+      var pick = localPicks[f.bookId] || { slot: '', note: '' };
+      var opts = ['<option value="">— 不参与评价 —</option>'].concat(localSlots.map(function(s) {
+        return '<option value="' + escapeHtml(s) + '"'
+          + (pick.slot === s ? ' selected' : '') + '>' + escapeHtml(s) + '</option>';
+      })).join('');
+
+      var counts = '划线 ' + (f.totalBookmarks || 0) + ' 条 ｜ 想法 ' + (f.totalReviews || 0) + ' 条';
+      if (f.totalBookReviews) counts += ' ｜ 书评 ' + f.totalBookReviews + ' 条';
+      var stars = (f.myRating !== null && f.myRating !== undefined)
+        ? '<span class="my-rating">我的评价 ' + starText(f.myRating) + '</span>' : '';
+
+      return '<div class="lf-row' + (pick.slot ? ' filled' : '') + '" data-book-id="'
+        + escapeHtml(f.bookId) + '">'
+        + '<div>'
+        +   '<div class="lf-name">' + escapeHtml(f.title) + stars + '</div>'
+        +   '<div class="lf-signals">判定依据：'
+        +     escapeHtml((f.sourceSignals || []).join('、') || '未记录') + '</div>'
+        +   '<div class="lf-counts">' + counts + '</div>'
+        + '</div>'
+        + '<div><label class="lf-slot-label">归类为</label>'
+        +   '<select data-role="slot">' + opts + '</select>'
+        +   '<button class="lf-unsplit" data-book-id="' + escapeHtml(f.bookId) + '">'
+        +     '↩︎ 其实是上架书籍</button></div>'
+        + '<textarea data-role="note" placeholder="写一段你对这本书的介绍与感悟（会放在该书的划线与想法前面）">'
+        +   escapeHtml(pick.note || '') + '</textarea>'
+        + '</div>';
+    }).join('');
+  }
+
+  var go = function(p) { syncLfDraft(); lfPage = p; renderLocalFiles(); };
+  renderPager($('lf-pager-top'), pg, list.length, '本', go);
+  renderPager($('lf-pager-bottom'), pg, list.length, '本', go);
 }
 
+$('lf-search').addEventListener('input', function() {
+  syncLfDraft();
+  lfQuery = this.value;
+  lfPage = 1;
+  renderLocalFiles();
+});
+
 function collectLocalPicks() {
+  // 分页之后 DOM 里只有当前页，所以从 localPicks（已含全部页的草稿）收
+  syncLfDraft();
   var picks = {};
-  document.querySelectorAll('#lf-rows .lf-row').forEach(function(row) {
-    var slotEl = row.querySelector('[data-role=slot]');
-    var noteEl = row.querySelector('[data-role=note]');
-    if (!slotEl || !noteEl) return;
-    var slot = slotEl.value, note = noteEl.value.trim();
-    if (slot || note) picks[row.dataset.bookId] = { slot: slot, note: note };
+  Object.keys(localPicks).forEach(function(bid) {
+    var p = localPicks[bid] || {};
+    var slot = (p.slot || '').trim(), note = (p.note || '').trim();
+    if (slot || note) picks[bid] = { slot: slot, note: note };
   });
   return picks;
 }
@@ -1781,7 +2034,9 @@ $('lf-save-btn').addEventListener('click', async function() {
     });
     if (!res.ok) throw new Error((await res.json()).detail || '保存失败');
     var d = await res.json();
-    localPicks = d.picks || {};
+    // 合并而不是替换：服务端那份是它认下的，本地这份还含着别的页没提交的草稿。
+    // 直接 localPicks = d.picks 会把翻页前写的东西抹掉。
+    localPicks = Object.assign({}, localPicks, d.picks || {});
     renderLocalFiles();
     $('lf-hint').textContent = '✅ 已保存，选入的书会出现在书单末尾';
     setTimeout(function() { $('lf-hint').textContent = ''; }, 3000);
@@ -1813,6 +2068,34 @@ async function restoreAsShelfBook(bookId) {
   }
 }
 
+// 批量出口：有评分的书必然是上架书籍，一本本点太慢
+async function restoreRatedAsShelfBooks() {
+  var ids = lfRatedFiles().map(function(f) { return f.bookId; });
+  if (!currentUid || !ids.length) return;
+  var btn = $('lf-restore-rated');
+  btn.disabled = true;
+  btn.textContent = '⏳ 正在放回 ' + ids.length + ' 本…';
+  try {
+    var res = await fetch(apiUrl('/api/data/source-override/', currentUid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookIds: ids, source: 'weread' }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || '改判失败');
+    $('lf-hint').textContent = '✅ 已放回 ' + ids.length + ' 本';
+    setTimeout(function() { $('lf-hint').textContent = ''; }, 3000);
+    localPicks = {};
+    await loadLocalFiles();
+    await loadReviewData();
+  } catch (e) {
+    $('lf-hint').textContent = '❌ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    renderLocalFiles();
+  }
+}
+
+$('lf-restore-rated').addEventListener('click', restoreRatedAsShelfBooks);
+
 $('lf-rows').addEventListener('click', function(e) {
   var btn = e.target.closest('.lf-unsplit');
   if (!btn) return;
@@ -1825,11 +2108,11 @@ $('lf-add-slot-btn').addEventListener('click', function() {
   if (localSlots.indexOf(name) < 0) localSlots.push(name);
   $('lf-new-slot-name').value = '';
   // 先收回界面上的输入再重绘，否则新分类一带出来，刚写的感悟就没了
-  localPicks = Object.assign({}, localPicks, collectLocalPicksDraft());
+  syncLfDraft();
   renderLocalFiles();
 });
 
-// ── Step 5: 联网补检配置 ──
+// ── Step 6: 联网补检配置 ──
 
 let searchProviders = [];
 
@@ -1954,6 +2237,7 @@ function renderReviewStep(data) {
       '<div class="stat-box"><div class="num">' + (stats.totalBookReviews || 0) + '</div><div class="label">书评条数</div></div>' +
       '<div class="stat-box"><div class="num">' + (stats.ratedBooks || 0) + '</div><div class="label">我打过分的书</div></div>' +
       '<div class="stat-box"><div class="num">' + (stats.localFiles || 0) + '</div><div class="label">本地上传文件</div></div>' +
+      '<div class="stat-box"><div class="num">' + (stats.uncertainBooks || 0) + '</div><div class="label">详情未取到</div></div>' +
       '</div>';
 
     if (stats.topCategories && stats.topCategories.length) {
@@ -1962,20 +2246,34 @@ function renderReviewStep(data) {
         html += '<span style="display:inline-block;background:#e8f5e9;border-radius:12px;padding:2px 10px;margin:2px;font-size:13px;">' + c[0] + ' (' + c[1] + ')</span>';
       });
       html += '</div>';
+      if (stats.topCategories.some(function(c) { return c[0] === '未识别'; })) {
+        html += '<div style="font-size:12px;color:#888;margin-top:4px;">「未识别」= 本次提取没取到这些书的平台分类，与这些书本身有没有分类无关。</div>';
+      }
     }
     statsEl.innerHTML = html;
   }
 
   // Book list
-  var el = $('books-container');
+  reviewBooks = books;
+  bookPage = 1;
+  show('books-details');
   if (!books.length) {
-    el.innerHTML = '<p>没有找到有笔记的书籍</p>';
+    $('books-container').innerHTML = '<p>没有找到有笔记的书籍</p>';
+    $('books-count').textContent = '共 0 本';
     $('to-ai-btn').disabled = false;
     return;
   }
+  renderBookList();
+}
 
-  var listHtml = '<p style="font-size:14px;color:#666;margin-bottom:8px;">共 ' + books.length + ' 本书（点击展开详情，可删除不想评价的书籍）：</p>';
-  books.forEach(function(b, i) {
+let reviewBooks = [];
+let bookPage = 1;
+let bookQuery = '';
+
+// 单本书的卡片。i 是全量数组里的绝对下标，不是页内下标 ——
+// 翻页之后 data-bi 仍然唯一，展开/收起才不会点错书。
+function bookCardHtml(b, i) {
+    var listHtml = '';
     var bid = b.bookId || '';
     var cats = b.category ? b.category.replace(/[\[\]"]/g, '') : '-';
     var parts = ['划线: ' + (b.totalBookmarks ?? 0) + ' 条', '想法: ' + (b.totalReviews ?? 0) + ' 条'];
@@ -1985,8 +2283,15 @@ function renderReviewStep(data) {
       ? '<span class="my-rating">我的评价 ' + starText(b.myRating) + '</span>' : '';
     var localBadge = (b.source === 'local')
       ? '<span class="local-badge">📁 本地上传' + (b.userSlot ? '｜' + escapeHtml(b.userSlot) : '') + '</span>' : '';
+    // 证据不足但仍进了书单的书：把判定依据挂在 title 上，鼠标悬停可看
+    var uncertainBadge = (b.source === 'weread' && b.sourceConfidence === 'low')
+      ? '<span class="uncertain-badge" title="'
+        + escapeHtml((b.sourceSignals || []).join('；')) + '">详情未取到</span>' : '';
 
-    listHtml += '<div class="book-card" id="review-card-' + i + '" data-book-id="' + escapeHtml(bid) + '"><details><summary>' + escapeHtml(b.title || '无标题') + localBadge + '</summary>' +
+    // 删除状态从 deletedBookIds 重建，而不是靠上一次渲染留下的 class ——
+    // 翻页重绘之后，旧的 DOM 状态就没了
+    var isDeleted = deletedBookIds.has(bid);
+    listHtml += '<div class="book-card' + (isDeleted ? ' deleted' : '') + '" id="review-card-' + i + '" data-book-id="' + escapeHtml(bid) + '"><details><summary>' + escapeHtml(b.title || '无标题') + localBadge + uncertainBadge + '</summary>' +
       '<div class="meta">作者: ' + escapeHtml(b.author || '-') + ' ｜ 分类: ' + escapeHtml(cats) + ' ｜ 社区评分: ' + (b.rating ? b.rating.toFixed(1) : '-') + myStars + '</div>' +
       '<div class="meta">' + parts.join(' ｜ ') + '</div>';
 
@@ -2081,18 +2386,65 @@ function renderReviewStep(data) {
     }
 
     listHtml += '<div style="margin-top:8px;">' +
-      '<span class="deleted-badge" style="display:none">✅ 已删除</span>' +
+      '<span class="deleted-badge"' + (isDeleted ? '' : ' style="display:none"') + '>✅ 已删除</span>' +
       '<button class="delete-btn" data-book-id="' + escapeHtml(bid) + '">🗑️ 删除此书</button></div>' +
       '</details></div>';
-  });
+    return listHtml;
+}
+
+function bookMatches(b) {
+  var q = (bookQuery || '').trim().toLowerCase();
+  if (!q) return true;
+  return (b.title || '').toLowerCase().indexOf(q) >= 0
+      || (b.author || '').toLowerCase().indexOf(q) >= 0;
+}
+
+function renderBookList() {
+  var el = $('books-container');
+  // 保留全量下标：data-bi 用的是它在 reviewBooks 里的位置，翻页也不变
+  var kept = [];
+  reviewBooks.forEach(function(b, i) { if (bookMatches(b)) kept.push({ b: b, i: i }); });
+
+  var pg = paginateRows(kept, bookPage);
+  bookPage = pg.page;
+
+  var head = '<p style="font-size:14px;color:#666;margin-bottom:8px;">共 '
+    + reviewBooks.length + ' 本书（点击展开详情，可删除不想评价的书籍）';
+  if (kept.length !== reviewBooks.length) head += '，当前筛出 ' + kept.length + ' 本';
+  head += '：</p>';
+
+  var listHtml = head;
+  if (!pg.rows.length) {
+    listHtml += '<div class="pg-empty">没有匹配「' + escapeHtml(bookQuery) + '」的书</div>';
+  } else {
+    pg.rows.forEach(function(o) { listHtml += bookCardHtml(o.b, o.i); });
+  }
   el.innerHTML = listHtml;
+
+  var alive = reviewBooks.filter(function(b) { return !deletedBookIds.has(b.bookId); }).length;
+  $('books-count').textContent = '共 ' + alive + ' 本'
+    + (deletedBookIds.size ? '（已删除 ' + deletedBookIds.size + ' 本）' : '');
+
+  var go = function(p) { bookPage = p; renderBookList(); };
+  renderPager($('books-pager-top'), pg, kept.length, '本', go);
+  renderPager($('books-pager-bottom'), pg, kept.length, '本', go);
 
   // Enable proceed button
   updateProceedButton();
 }
 
+$('books-search').addEventListener('input', function() {
+  bookQuery = this.value;
+  bookPage = 1;
+  renderBookList();
+});
+
 function updateProceedButton() {
-  var visibleBooks = document.querySelectorAll('#books-container .book-card:not(.deleted)').length;
+  // 分页之后 DOM 里只有当前页，数 DOM 会数出"只剩 20 本"这种假象。
+  // 这里必须以全量数组为准。
+  var visibleBooks = reviewBooks.filter(function(b) {
+    return !deletedBookIds.has(b.bookId);
+  }).length;
   $('to-ai-btn').disabled = (visibleBooks === 0);
   if (visibleBooks === 0) {
     $('to-ai-btn').textContent = '⚠️ 请至少保留一本书';
@@ -2122,8 +2474,8 @@ $('books-container').addEventListener('click', function(e) {
         var badge = card.querySelector('.deleted-badge');
         if (badge) badge.style.display = 'inline-block';
       }
-      $('to-ai-btn').disabled = false;
-      updateProceedButton();
+      // 重绘当前页：删完可能这一页正好空了，页码要自动收回去
+      renderBookList();
       refreshEstimate();
     }).catch(function(err) {
       console.error('delete failed', err);
@@ -2159,10 +2511,10 @@ $('books-container').addEventListener('click', function(e) {
 $('to-ai-btn').addEventListener('click', function() {
   if (this.disabled) return;
   $('ai-btn').disabled = false;
-  goStep(5);
+  goStep(6);
 });
 
-// ── Step 5: AI Evaluation ──
+// ── Step 6: AI Evaluation ──
 
 // Style toggle
 document.querySelectorAll('.style-btn').forEach(function(btn) {
@@ -2217,7 +2569,7 @@ $('ai-btn').addEventListener('click', async function() {
       $('ai-progress-text').textContent = '✅ AI 评价完成！';
       $('ai-btn').textContent = '✅ 评价完成';
       renderAiReport(d.report);
-      goStep(6);
+      goStep(7);
 
     } else if (d.status === 'error') {
       aiEventSource.close();
@@ -2236,7 +2588,7 @@ $('ai-btn').addEventListener('click', async function() {
   };
 });
 
-// ── Step 6: Report ──
+// ── Step 7: Report ──
 
 function renderAiReport(report) {
   if (!report || report.error) {

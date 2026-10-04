@@ -497,6 +497,265 @@ def test_analyzer_two_stage() -> None:
     check("阶段二正文分类分布标为全量", "全量统计" in profile_txt)
 
 
+def test_source_classification() -> None:
+    print("\n[7] 来源判定（评分硬信号 / errcode 不再定案本地 / 批量改判）")
+    sys.path.insert(0, str(ROOT / "backend"))
+    sys.dont_write_bytecode = True
+    from services import weread, weread_api
+
+    cls = weread.classify_book_source
+    shelf = {"bookId": "B1", "title": "一本冷门书", "author": "某某"}
+    pdf = {"bookId": "B2", "title": "2023年度技术规划.pdf", "author": ""}
+
+    # ── 评分是硬信号：微信读书不给本地上传的文件打分
+    s, sig, conf = cls(shelf, {"errcode": -10102}, my_rating=4.0)
+    check("我打过分 + 详情 errcode → 上架", s == "weread" and conf == "high",
+          f"{s}/{conf} {sig}")
+    s, sig, conf = cls(shelf, {"errcode": -10102, "newRating": 8900})
+    check("有社区评分 + 详情 errcode → 上架", s == "weread" and conf == "high",
+          f"{s}/{conf} {sig}")
+
+    # ── errcode 只说明"这一路没取到"，不定案本地
+    s, sig, conf = cls(shelf, {"errcode": -10102})
+    check("errcode 且无评分 → 仍按上架书籍收录", s == "weread", f"{s} {sig}")
+    check("  ↳ 标为低置信，交给前端提示复核", conf == "low", str(conf))
+    check("  ↳ 依据写清是哪一步没取到", any("errcode" in x for x in sig), str(sig))
+    s, sig, conf = cls(shelf, {})
+    check("详情接口无返回 → 按上架书籍收录（低置信）",
+          s == "weread" and conf == "low", f"{s}/{conf}")
+    s, sig, conf = cls(shelf, {"title": "一本冷门书"})
+    check("元数据稀疏 → 按上架书籍收录（低置信）",
+          s == "weread" and conf == "low", f"{s}/{conf}")
+
+    # ── 书名带扩展名仍是可用的本地硬信号
+    s, sig, conf = cls(pdf, {"errcode": -10102})
+    check("书名带扩展名 → 本地", s == "local" and conf == "high", f"{s}/{conf} {sig}")
+    s, sig, conf = cls(shelf, {"isbn": "9787111111111", "title": "一本冷门书"})
+    check("有 ISBN → 上架高置信", s == "weread" and conf == "high", f"{s}/{conf} {sig}")
+
+    # ── 反断言：errcode 场景下绝不判本地。
+    # 依据来自用户实测：那条判定翻几千本基本只有误伤。
+    bad = []
+    for my in (None, 1.0, 2.5, 5.0):
+        for info in ({"errcode": -10102}, {"errcode": -2012}, {"errcode": 1}, {}):
+            src, _, _ = cls(shelf, info, my_rating=my)
+            if src != "weread":
+                bad.append((my, info, src))
+    check("带 errcode 的书一律不判本地", not bad, str(bad))
+
+    bad2 = []
+    for my in (None, 3.0):
+        for info in ({"errcode": -10102}, {}):
+            for bk in (shelf, pdf):
+                src, s2, _ = cls(bk, info, my_rating=my)
+                if src == "local" and any("errcode" in x for x in s2):
+                    bad2.append((bk.get("title"), info, s2))
+    check("本地判定依据里不出现 errcode", not bad2, str(bad2))
+
+    # ── 详情取数：带 errcode 的不算取到，才会去换下一条路径
+    check("errcode 的响应不算取到详情",
+          weread_api._info_usable({"errcode": -10102}) is False)
+    check("有 title 的响应算取到详情", weread_api._info_usable({"title": "三体"}) is True)
+    check("空响应不算取到详情", weread_api._info_usable({}) is False)
+    check("详情接口备了多条取数路径", len(weread_api.BOOK_INFO_URLS) >= 2,
+          str(len(weread_api.BOOK_INFO_URLS)))
+
+    stats = weread.compute_stats([
+        {"source": "weread", "sourceConfidence": "low", "category": "A"},
+        {"source": "weread", "sourceConfidence": "high", "category": "A"},
+        {"source": "local", "sourceConfidence": "high", "category": ""},
+    ])
+    check("统计里单独数出低置信上架书", stats.get("uncertainBooks") == 1, str(stats))
+
+    # ── 批量改判：一眼可辨的误判要能一次捞回来
+    with Server() as base:
+        _, body = request(base, "/api/auth/session", method="POST")
+        uid = body["uid"]
+        request(base, f"/api/demo/load/{uid}", method="POST")
+
+        _, before = request(base, f"/api/data/local-picks/{uid}")
+        check("示例数据里本地文件被单独列出", len(before["files"]) == 2,
+              str(len(before["files"])))
+
+        _, body = request(base, f"/api/data/source-override/{uid}", method="POST",
+                          body={"bookIds": ["demo009", "demo010"], "source": "weread"})
+        check("批量改判返回改动本数", body.get("changed") == 2, str(body))
+
+        _, after = request(base, f"/api/data/local-picks/{uid}")
+        check("批量改判后本地面板清空", len(after["files"]) == 0, str(len(after["files"])))
+
+        status, _ = request(base, f"/api/data/source-override/{uid}", method="POST",
+                            body={"source": "weread"})
+        check("既不传 bookId 也不传 bookIds → 400", status == 400, str(status))
+
+
+def test_unrecognized_category() -> None:
+    print("\n[8] 分类「未识别」（空分类归一 / 独立参与配额 / 说明书讲清口径）")
+    sys.path.insert(0, str(ROOT / "backend"))
+    sys.dont_write_bytecode = True
+    from config import UNRECOGNIZED_CATEGORY as UNREC
+    from services import analyzer, weread
+
+    check("占位名是「未识别」", UNREC == "未识别", str(UNREC))
+
+    # ── 归一：只补上架书籍，本地文件不在平台分类体系里
+    normed = analyzer._norm_books([
+        {"source": "local", "category": ""},
+        {"source": "weread", "category": ""},
+        {"source": "weread", "category": "科幻"},
+    ])
+    check("上架书籍空分类 → 「未识别」", normed[1]["category"] == UNREC,
+          str(normed[1].get("category")))
+    check("本地上传文件不补「未识别」（它的分类空着是应该的）",
+          normed[0].get("category", "") == "", str(normed[0].get("category")))
+    check("有分类的书不动", normed[2]["category"] == "科幻")
+
+    # ── 统计：空分类计入「未识别」，各分类本数之和 == 上架书籍数
+    stats = weread.compute_stats([
+        {"source": "weread", "category": "科幻"},
+        {"source": "weread", "category": ""},
+        {"source": "weread", "category": ""},
+        {"source": "local", "category": ""},
+    ])
+    cats = dict(stats.get("topCategories", []))
+    check("空分类计入「未识别」", cats.get(UNREC) == 2, str(cats))
+    check("本地上传文件不计入分类分布", sum(cats.values()) == 3, str(cats))
+
+    # ── 配额：未识别是一个独立分组，与其他分类同等对待
+    def mk(cat, n):
+        return [{"bookId": f"{cat or 'x'}{i}", "title": f"{cat}{i}",
+                 "category": cat, "rating": 8.0} for i in range(n)]
+
+    kept, info = analyzer.sample_shelf_list(mk("科幻", 3) + mk("", 40))
+    check("未识别独立成组", info["categories"] == 2, str(info))
+    check("↳ 与其他分类同等配额（书多不多给）", info["kept"] == 8, str(info))
+    check("↳ 参考分类仍是书最少的那个分类", info["ref_category"] == "科幻", str(info))
+    check("↳ 每类至少 5 本的兜底生效", info["quota"] == 5, str(info))
+
+    kept2, info2 = analyzer.sample_shelf_list(mk("科幻", 30) + mk("", 2))
+    check("未识别是最小分类时成为参考分类",
+          info2["ref_category"] == UNREC, str(info2))
+    check("↳ 那时它全部保留", info2["ref_count"] == 2, str(info2))
+    check("↳ 其余分类按兜底各取 5 本", info2["kept"] == 7, str(info2))
+
+    # ── 呈现：书单行与详细样本都写「未识别」
+    line = analyzer._book_list_line({"title": "一本没取到分类的书", "category": ""})
+    check("书单行写 [未识别]", f"[{UNREC}]" in line, line)
+
+    # ── 数据说明书：讲清这是导出程序这一次的结果，不是书的题材
+    brief = analyzer._render_brief()
+    check("说明书里有「未识别」这一节", UNREC in brief)
+    check("↳ 写明它描述的是这次导出的结果", "导出程序" in brief)
+    check("↳ 给出这些书题材的来源（书名/作者/痕迹）", "看书名、作者" in brief)
+    check("↳ 写明它与真实分类同等参与配额与覆盖", "配额分组" in brief)
+    # 口径声明一律肯定式：否定句会被模型当成待办条目
+    check("↳ 这一节没有否定句", "不是" not in brief and "不代表" not in brief)
+
+    # ── 端到端：示例数据的分类不因归一而漂移
+    with Server() as base:
+        _, body = request(base, "/api/auth/session", method="POST")
+        uid = body["uid"]
+        request(base, f"/api/demo/load/{uid}", method="POST")
+        _, res = request(base, f"/api/data/result/{uid}")
+        demo_cats = dict(res["stats"].get("topCategories", []))
+        check("示例数据里没有凭空多出的「未识别」",
+              UNREC not in demo_cats and sum(demo_cats.values()) == 8, str(demo_cats))
+        check("↳ 示例数据的本地文件不计入分类", "科幻" in demo_cats, str(demo_cats))
+
+
+def test_extract_scan_flow() -> None:
+    """时间范围筛选的显式流程：scan → 带筛选提取 / 全量提取。
+
+    旧设计是提取中途挂起 60 秒等前端提交筛选（FILTER_TIMEOUT），时间线为空
+    或 SSE 重连时只剩一句提示没有面板。重设计后：扫描与提取是两个独立请求，
+    筛选条件随提取请求一起提交，没有任何"超时后按默认继续"的中间态。
+    """
+    print("\n[9] 时间范围筛选流程（scan → extract）")
+    sys.path.insert(0, str(ROOT / "backend"))
+    sys.dont_write_bytecode = True
+    import asyncio  # noqa: E402
+    import routers.data as dm  # noqa: E402
+    from routers.data import ExtractInput  # noqa: E402
+    from services import weread_api as api  # noqa: E402
+    from stdhttp import HTTPError  # noqa: E402
+    from store import store  # noqa: E402
+
+    api.log = lambda *a, **k: None
+    books = [{"bookId": "a", "title": "A"}, {"bookId": "b", "title": "B"},
+             {"bookId": "c", "title": "C"}]
+    shelf = {
+        "a": {"updated": [], "chapters": [], "_entry": {"sort": 1700000000}},
+        "b": {"updated": [], "chapters": [], "_entry": {"sort": 1600000000}},
+        "c": {"updated": [], "chapters": [], "_entry": {"sort": 1500000000}},
+    }
+
+    async def fake_refresh(c): return c
+    async def fake_nb(c): return {"books": [dict(b) for b in books]}, c
+    async def fake_shelf(c): return dict(shelf), c
+    async def fake_info(c, b): return {}, c
+    async def fake_bm(c, b, shelf_bookmarks=None): return {"updated": [], "chapters": []}, c
+    async def fake_rv(c, b): return {}, c
+    async def fake_ch(c, b): return {}, c
+
+    api.refresh_cookies = fake_refresh
+    api.fetch_notebooks = fake_nb
+    api.fetch_shelf_sync = fake_shelf
+    api.fetch_book_info = fake_info
+    api.fetch_bookmarks = fake_bm
+    api.fetch_reviews = fake_rv
+    api.fetch_chapters = fake_ch
+
+    async def scenario():
+        sess = store.create("scanflow")
+        sess["cookies"] = {"wr_vid": "x"}
+
+        # 未扫描就带筛选提取 → 400，不允许绕过流程
+        try:
+            await dm.extract_data(
+                "scanflow",
+                ExtractInput(mode="full", startDate=1.0, endDate=2.0, excludedBookIds=[]),
+            )
+            return ("no-400",)
+        except HTTPError as e:
+            guard = e.status_code == 400
+
+        scan = await dm.data_scan("scanflow")
+        prefetched = sess.get("scan_books_raw") is not None
+
+        await dm.extract_data(
+            "scanflow",
+            ExtractInput(mode="full", startDate=1550000000.0,
+                         endDate=1750000000.0, excludedBookIds=["b"]),
+        )
+        while sess.get("extracting"):
+            await asyncio.sleep(0.02)
+        filtered = [b["bookId"] for b in sess["data"]["books"]]
+
+        await dm.extract_data("scanflow", ExtractInput(mode="full"))
+        while sess.get("extracting"):
+            await asyncio.sleep(0.02)
+        full = sorted(b["bookId"] for b in sess["data"]["books"])
+
+        await dm.extract_data(
+            "scanflow",
+            ExtractInput(mode="full", startDate=1.0, endDate=2.0, excludedBookIds=[]),
+        )
+        while sess.get("extracting"):
+            await asyncio.sleep(0.02)
+        empty_phase = sess["progress"].get("phase")
+
+        return (guard, scan, prefetched, filtered, full, empty_phase)
+
+    guard, scan, prefetched, filtered, full, empty_phase = asyncio.run(scenario())
+    check("未扫描就带筛选提取被拒（400）", guard is True)
+    check("scan 返回书单与时间线",
+          scan.get("total") == 3 and len(scan.get("books", [])) == 3, str(scan)[:120])
+    check("scan 结果留在会话里供提取复用", prefetched)
+    check("带筛选提取只抓选中范围的书", filtered == ["a"], str(filtered))
+    check("不带筛选提取抓全部", full == ["a", "b", "c"], str(full))
+    check("筛选结果为空时返回 empty 阶段", empty_phase == "empty", str(empty_phase))
+
+
 def main() -> int:
     print("=" * 56)
     print(" 微信读书 · AI 阅读评价 —— 冒烟测试")
@@ -504,7 +763,8 @@ def main() -> int:
 
     for fn in (test_open_mode, test_auth_mode, test_session_eviction,
                test_readme_matches_routes, test_frontend_url_building,
-               test_analyzer_two_stage):
+               test_analyzer_two_stage, test_source_classification,
+               test_unrecognized_category, test_extract_scan_flow):
         try:
             fn()
         except Exception as e:  # noqa: BLE001

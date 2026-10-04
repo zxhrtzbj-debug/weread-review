@@ -3,12 +3,14 @@
 职责：并发抓书 → 解析 review 类型 → 拼装章节标题 → 生成统计。
 HTTP 细节全在 services/weread_api.py，这里不出现任何 URL。
 
-extract_all_data 的时序（与前端 step-3 的 SSE 状态机严格对应）：
-    notebook  → shelf/sync  →  timeline 事件
-                             → 挂起等前端筛选（get_filter，最多 FILTER_TIMEOUT 秒）
-                             →  notebooks 事件（筛选后的书单）
+extract_all_data 的时序（与前端提取步骤的 SSE 状态机严格对应）：
+    notebook  → shelf/sync  →  notebooks 事件（要抓的书单）
                              →  逐本 book_done 事件
                              →  返回 {books, stats}
+
+时间范围挑选在提取之前独立完成：/api/data/scan 先跑 scan_books 拿回
+书单 + 时间线，前端据此渲染挑选面板；确认后把筛选条件和扫描结果一起交给
+extract_all_data（prefetched + filter_data），书单接口不会打第二遍。
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import re
 import time
 from collections import Counter
 
-from config import BOOK_CONCURRENCY
+from config import BOOK_CONCURRENCY, UNRECOGNIZED_CATEGORY
 from services import weread_api as api
 from stdfetch import arequest
 
@@ -196,8 +198,6 @@ _LOCAL_FILE_SUFFIX_RE = re.compile(
 # 权重 = 该字段作为"上架证据"的强度（ISBN 只有正式出版物才有）。
 _SHELF_SIGNALS = (
     ("isbn", 3, "ISBN"),
-    ("newRating", 2, "社区评分"),
-    ("newRatingCount", 2, "评分人数"),
     ("publisher", 2, "出版社"),
     ("publishTime", 1, "出版时间"),
     ("wordCount", 1, "字数"),
@@ -207,53 +207,101 @@ _SHELF_SIGNALS = (
 )
 
 # 命中权重和 ≥ 这个值判为上架。ISBN 一项即可达标；
-# 只有书名、没有任何出版物元数据的上传文件只能拿到 0 分，判为本地。
+# 只有书名、没有任何出版物元数据的上传文件只能拿到 0 分。
 _SHELF_SCORE_MIN = 2
 
 
-def classify_book_source(book: dict, info: dict) -> tuple[str, list[str]]:
+def _has_community_rating(info: dict) -> bool:
+    """book/info 里有没有社区评分。百分制（8900 → 8.9 分）。"""
+    if not isinstance(info, dict):
+        return False
+    for field in ("newRating", "newRatingCount"):
+        val = info.get(field)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            if val > 0:
+                return True
+        elif isinstance(val, str) and val.strip().isdigit() and int(val) > 0:
+            return True
+    return False
+
+
+def classify_book_source(
+    book: dict, info: dict, *, my_rating: float | None = None
+) -> tuple[str, list[str], str]:
     """判定一本书是「微信读书上架书籍」还是「用户本地上传的文件」。
 
     为什么必须判：本地上传的文件名常常不是书名（扫描件、论文 PDF、内部资料），
     它们混进书单会让 LLM 对着一串文件名编造阅读品味，还会占掉抽样名额。
 
-    判据从强到弱：
-      1. 书名带电子书扩展名 → 本地（硬信号，直接定案）
-      2. book/info 返回空 / 带 errcode / 无书名 → 本地（书城里查无此书）
-      3. 统计出版物元数据字段的加权命中数，≥ _SHELF_SCORE_MIN → 上架，否则本地
+    ── 判定顺序（先命中先定案）────────────────────────────
+      1. 有评分（我的 / 社区）     → 上架
+      2. 书名带电子书扩展名        → 本地
+      3. 出版物元数据加权 ≥ 阈值   → 上架
+      4. 详情没取到 / 元数据稀疏   → 上架（低置信）
 
-    返回 ("weread" | "local", 命中的证据名列表)。证据会回传给前端，
-    判定不准时用户能看见依据并手动改判。
+    评分排在最前：微信读书只给上架书籍打分，本地上传的文件既拿不到社区
+    评分也没有打分入口，所以「有评分」就是"这本书在书城里"的铁证，
+    连书名带扩展名这种信号也得让位给它。
+
+    ── 为什么第 4 条默认判上架，而不是判本地 ──────────────
+    两种判错代价不对称：
+      · 把上架书判成本地 → 这本书从书单里消失，用户得去几千本里把它捞回来。
+        这正是 errcode=-10102 那条旧规则的实测结果：几千本里基本只有误伤。
+      · 把本地文件判成上架 → 书单里多一行文件名，用户在折叠面板里一键改判即可。
+    所以凡是没有确凿本地证据的，一律按上架书籍收录。
+
+    ── errcode 为什么不再参与定案 ─────────────────────────
+    book/info 返回 errcode 只说明"这次没取到详情"（限流、已下架、公众号文集
+    都可能触发），不说明"它是本地文件"。旧规则把它当成"书城查无此书"直接判
+    本地，是误伤的主因。现在它只作为说明性信号回传：判定照走第 4 条。
+
+    返回 (source, signals, confidence)。confidence = "high" | "low"，
+    low 表示"证据不足，按上架处理"，前端据此提示用户复核。
     """
-    title = (book.get("title") or info.get("title") or "").strip() if isinstance(info, dict) else (book.get("title") or "").strip()
+    title = (book.get("title") or "").strip()
+    if isinstance(info, dict) and not title:
+        title = (info.get("title") or "").strip()
 
+    # 1. 评分硬信号：独立于 book/info，取到即定案
+    if my_rating is not None:
+        return "weread", ["我给这本书打过分"], "high"
+    if _has_community_rating(info):
+        return "weread", ["有社区评分"], "high"
+
+    # 2. 本地硬信号：文件名几乎总带扩展名，上架书籍的书名不会
     if title and _LOCAL_FILE_SUFFIX_RE.search(title):
-        return "local", ["书名带电子书扩展名"]
+        return "local", ["书名带电子书扩展名"], "high"
 
-    if not isinstance(info, dict) or not info:
-        return "local", ["书籍详情接口无返回"]
-
-    if info.get("errcode"):
-        return "local", [f"书籍详情 errcode={info.get('errcode')}"]
-
-    if not (info.get("title") or book.get("title") or "").strip():
-        return "local", ["书籍详情无书名"]
-
+    # 3. 出版物元数据加权
     hits: list[str] = []
     score = 0
-    for field, weight, label in _SHELF_SIGNALS:
-        val = info.get(field)
-        if isinstance(val, str):
-            if not val.strip():
+    if isinstance(info, dict):
+        for field, weight, label in _SHELF_SIGNALS:
+            val = info.get(field)
+            if isinstance(val, str):
+                if not val.strip():
+                    continue
+            elif not val:
                 continue
-        elif not val:
-            continue
-        score += weight
-        hits.append(label)
-
+            score += weight
+            hits.append(label)
     if score >= _SHELF_SCORE_MIN:
-        return "weread", hits
-    return "local", hits or ["出版物元数据字段全空"]
+        return "weread", hits, "high"
+
+    # 4. 证据不足：记录缺了哪一步，按上架书籍收录
+    if not isinstance(info, dict) or not info:
+        return "weread", ["书籍详情接口无返回，按上架书籍收录"], "low"
+
+    if info.get("errcode"):
+        # errcode 是"这次没取到"，不是"这本书不存在"。只记账，不定案。
+        return "weread", [
+            f"书籍详情未取到（errcode={info.get('errcode')}），按上架书籍收录"
+        ], "low"
+
+    if not title:
+        return "weread", ["书籍详情无书名，按上架书籍收录"], "low"
+
+    return "weread", (hits + ["出版物元数据稀疏，按上架书籍收录"]), "low"
 
 
 def _chapter_title(review: dict, chapters_map: dict) -> str:
@@ -336,16 +384,25 @@ def parse_book_detail(
         top = _response_rating(reviews_data)
         if top is not None:
             my_rating, rating_src = top, "response"
-    source, source_signals = classify_book_source(book, info)
+    # 评分要先算出来再判来源：它是独立于 book/info 的一条硬证据，
+    # 详情接口挂了也照样能把这本书留在书单里。
+    source, source_signals, source_confidence = classify_book_source(
+        book, info, my_rating=my_rating
+    )
     if source == "local":
         api.log(f"  local file: {book.get('title', '')[:30]} signals={source_signals}")
+    elif source_confidence == "low":
+        api.log(
+            f"  low-confidence shelf book: {book.get('title', '')[:30]} "
+            f"signals={source_signals}"
+        )
 
     return {
         "bookId": book.get("bookId"),
         "title": book.get("title"),
         "author": book.get("author"),
         "cover": book.get("cover"),
-        "category": info.get("category"),
+        "category": info.get("category") or UNRECOGNIZED_CATEGORY,
         "rating": (info.get("newRating", 0) or 0) / 1000,
         "intro": info.get("intro", ""),
         # 我给这本书打的分（0-5 星）。没有评分就是 None —— 与"书评 0 条"是两回事：
@@ -353,9 +410,11 @@ def parse_book_detail(
         "myRating": my_rating,
         "myRatingSource": rating_src,
         "hasMyRating": my_rating is not None,
-        # 上架书籍 / 本地上传文件
+        # 上架书籍 / 本地上传文件。confidence="low" 表示证据不足、按上架收录，
+        # 前端据此提示用户复核，而不是让这本书静默消失。
         "source": source,
         "sourceSignals": source_signals,
+        "sourceConfidence": source_confidence,
         "totalBookmarks": len(highlights),
         "totalReviews": len(reviews),
         "totalBookReviews": len(book_reviews),
@@ -393,7 +452,12 @@ def apply_time_filter(books_raw: list, timeline: list, filter_data: dict) -> lis
 
 
 def compute_stats(books: list[dict]) -> dict:
-    categories = Counter(b.get("category", "") for b in books if b.get("category"))
+    # 分类取不到的书算进「未识别」：全量统计里各分类本数之和 == 书籍总数，
+    # 清单里的方括号与这里才对得上。
+    categories = Counter(
+        (b.get("category") or "").strip() or UNRECOGNIZED_CATEGORY
+        for b in books if b.get("source") != "local"
+    )
     authors = Counter(b.get("author", "") for b in books if b.get("author"))
     rated = [b.get("myRating") for b in books if b.get("myRating") is not None]
     return {
@@ -402,6 +466,11 @@ def compute_stats(books: list[dict]) -> dict:
         "totalReviews": sum(b.get("totalReviews", 0) for b in books),
         "totalBookReviews": sum(b.get("totalBookReviews", 0) for b in books),
         "localFiles": sum(1 for b in books if b.get("source") == "local"),
+        # 证据不足、按上架书籍收录的那些（详情没取到 / 元数据稀疏）。
+        # 它们进了书单，但值得在前端标出来让人复核一眼。
+        "uncertainBooks": sum(
+            1 for b in books if b.get("sourceConfidence") == "low"
+        ),
         "ratedBooks": len(rated),
         "avgMyRating": round(sum(rated) / len(rated), 2) if rated else 0,
         "topCategories": categories.most_common(10),
@@ -467,14 +536,34 @@ async def preflight(cookies: dict) -> dict:
     }
 
 
+async def scan_books(cookies: dict) -> tuple[list, dict, list, dict]:
+    """只抓书单 + 阅读时间线，不逐本抓内容——给「按时间范围挑选」那一步用。
+
+    用户挑完之后，books_raw 与 shelf_bookmarks 会作为 prefetched 传回
+    extract_all_data，同一批接口不用打两遍。
+    """
+    cookies = await api.refresh_cookies(cookies)
+    notebooks_data, cookies = await api.fetch_notebooks(cookies)
+    books_raw = notebooks_data.get("books", [])
+    shelf_bookmarks, cookies = await api.fetch_shelf_sync(cookies)
+    timeline = extract_timeline(shelf_bookmarks, books_raw)
+    api.log(f"scan: {len(books_raw)} 本有笔记，其中 {len(timeline)} 本有阅读时间")
+    return books_raw, shelf_bookmarks, timeline, cookies
+
+
 async def extract_all_data(
-    cookies: dict, progress_callback=None, *, get_filter=None, mode: str = "full"
+    cookies: dict, progress_callback=None, *, mode: str = "full",
+    prefetched: tuple | None = None, filter_data: dict | None = None,
 ):
     """mode="full"抓全部；mode="book_reviews" 只抓书评 + 书籍信息。
 
     快慢的差别来自接口本身：划线走 shelf/sync 预取 + bookmarklist 兜底，
     书评走 review/list，两者是独立端点。所以只取书评时可以直接不碰划线接口，
     顺带省掉只为划线服务的章节标题映射。
+
+    prefetched：(books_raw, shelf_bookmarks)，/api/data/scan 的预取结果。
+    用户在时间范围页确认筛选后复用，书单接口不再打第二遍。
+    filter_data：{"startDate", "endDate", "excludedBookIds"}，None 表示全量提取。
     """
     book_reviews_only = mode == "book_reviews"
 
@@ -486,40 +575,38 @@ async def extract_all_data(
     await emit("phase", 0, 0, "正在刷新登录态…")
     cookies = await api.refresh_cookies(cookies)
 
-    api.log("extract: 拉取笔记本列表")
-    await emit("phase", 0, 0, "正在获取笔记本列表…")
-    notebooks_data, cookies = await api.fetch_notebooks(cookies)
-    books_raw = notebooks_data.get("books", [])
-    api.log(f"extract: notebook 返回 {len(books_raw)} 本书")
-
-    if book_reviews_only:
-        # 只取书评时不需要划线数据；但时间线仍来自 shelf/sync 的 sort 字段，
-        # 所以这一请求保留（它是唯一带"最近阅读时间"的来源），只是不再逐本解析划线。
-        api.log("extract: 仅书评模式，仍取阅读时间线（不解析划线内容）")
-        await emit("phase", 0, len(books_raw), "正在获取阅读时间线…")
-        shelf_bookmarks, cookies = await api.fetch_shelf_sync(cookies)
+    if prefetched:
+        books_raw, shelf_bookmarks = prefetched
+        api.log(f"extract: 复用扫描结果，共 {len(books_raw)} 本")
+        await emit("phase", 0, len(books_raw), "已加载扫描好的书籍清单…")
     else:
-        api.log("extract: 拉取书架（划线 + 阅读时间）")
-        await emit("phase", 0, len(books_raw), "正在扫描书架与阅读时间…")
-        shelf_bookmarks, cookies = await api.fetch_shelf_sync(cookies)
+        api.log("extract: 拉取笔记本列表")
+        await emit("phase", 0, 0, "正在获取笔记本列表…")
+        notebooks_data, cookies = await api.fetch_notebooks(cookies)
+        books_raw = notebooks_data.get("books", [])
+        api.log(f"extract: notebook 返回 {len(books_raw)} 本书")
 
-    timeline = extract_timeline(shelf_bookmarks, books_raw)
-    if progress_callback and timeline:
-        await progress_callback(
-            "timeline", 0, len(books_raw), "", timeline_data=timeline
-        )
+        if book_reviews_only:
+            # 只取书评时不需要划线数据；但时间线仍来自 shelf/sync 的 sort 字段，
+            # 所以这一请求保留（它是唯一带"最近阅读时间"的来源），只是不再逐本解析划线。
+            api.log("extract: 仅书评模式，仍取阅读时间线（不解析划线内容）")
+            await emit("phase", 0, len(books_raw), "正在获取阅读时间线…")
+            shelf_bookmarks, cookies = await api.fetch_shelf_sync(cookies)
+        else:
+            api.log("extract: 拉取书架（划线 + 阅读时间）")
+            await emit("phase", 0, len(books_raw), "正在扫描书架与阅读时间…")
+            shelf_bookmarks, cookies = await api.fetch_shelf_sync(cookies)
 
-    if get_filter:
-        filter_data = await get_filter()
-        if filter_data:
-            books_raw = apply_time_filter(books_raw, timeline, filter_data)
-            if not books_raw:
-                if progress_callback:
-                    await progress_callback(
-                        "empty", 0, 0, "", message="所选时间段内没有阅读记录"
-                    )
-                return {"books": [], "stats": {}}
-            api.log(f"filtered to {len(books_raw)} books")
+    if filter_data:
+        timeline = extract_timeline(shelf_bookmarks, books_raw)
+        books_raw = apply_time_filter(books_raw, timeline, filter_data)
+        if not books_raw:
+            if progress_callback:
+                await progress_callback(
+                    "empty", 0, 0, "", message="所选时间段内没有阅读记录"
+                )
+            return {"books": [], "stats": {}}
+        api.log(f"extract: 时间筛选后剩 {len(books_raw)} 本")
 
     if progress_callback:
         await progress_callback(
@@ -548,21 +635,25 @@ async def extract_all_data(
             try:
                 if book_reviews_only:
                     # 书评 + 书籍信息：两个独立请求，跳过划线与章节标题
-                    (info, _), (reviews_data, _) = await asyncio.gather(
-                        api.fetch_book_info(dict(cookies), book_id),
+                    (info, _, info_meta), (reviews_data, _) = await asyncio.gather(
+                        api.fetch_book_info_meta(dict(cookies), book_id),
                         api.fetch_reviews(dict(cookies), book_id),
                     )
                     bookmarks_data, chapters_map = {}, {}
                 else:
-                    (info, _), (bookmarks_data, _), (reviews_data, _), (chapters_map, _) = (
+                    (info, _, info_meta), (bookmarks_data, _), (reviews_data, _), (chapters_map, _) = (
                         await asyncio.gather(
-                            api.fetch_book_info(dict(cookies), book_id),
+                            api.fetch_book_info_meta(dict(cookies), book_id),
                             api.fetch_bookmarks(dict(cookies), book_id,
                                                 shelf_bookmarks=shelf_bookmarks),
                             api.fetch_reviews(dict(cookies), book_id),
                             api.fetch_chapters(dict(cookies), book_id),
                         )
                     )
+                # 三条路径全失败时 info 是空 dict，errcode 只留在 meta 里。
+                # 把它并回 info，判定依据里才能写清"到底是哪一步没取到"。
+                if info_meta.get("errcode") is not None and not info.get("errcode"):
+                    info = {**info, "errcode": info_meta["errcode"]}
             except Exception as e:
                 api.log(f"book {index} {book.get('title', '')} failed: {e}")
                 return None

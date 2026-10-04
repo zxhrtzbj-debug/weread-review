@@ -71,9 +71,13 @@ def find_free_port(start: int = SERVER_PORT, tries: int = 10) -> int:
     return start
 
 # ── 数据提取 ──
-FILTER_TIMEOUT = 60        # 等待前端提交筛选条件的最长秒数
 REQUEST_TIMEOUT = 30.0     # 单个接口请求超时
 BOOK_CONCURRENCY = 5       # 并发抓书数量
+
+# 分类取不到时填的占位名（详情没取回来，或平台本来就没给这个字段）。
+# 它作为一个独立分类参与统计与配额抽样，与真实分类对齐；
+# 名字描述的是这一次导出的结果，不是这些书的题材。
+UNRECOGNIZED_CATEGORY = "未识别"
 
 # ── 联网搜索 ──
 SEARCH_TIMEOUT = 20.0      # 单次搜索请求超时

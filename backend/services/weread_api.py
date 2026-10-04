@@ -318,14 +318,94 @@ async def fetch_reviews_social(cookies: dict, book_id: str) -> tuple[dict, dict]
     return {"reviews": []}, cookies
 
 
-async def fetch_book_info(cookies: dict, book_id: str) -> tuple[dict, dict]:
-    resp, cookies = await request_with_retry(
-        "GET", f"https://weread.qq.com/web/book/info?bookId={book_id}", cookies
+# 书籍详情的多条取数路径。第一个是主路径，后面是退路。
+#
+# 为什么要有退路：/web/book/info 会因为限流、书籍下架、公众号文集等原因
+# 返回 errcode=-10102。旧逻辑把 errcode 当成"书城查无此书"直接判成本地上传
+# 文件，实测翻几千本基本只有误伤——它说明的其实是"这一路没取到"，
+# 换一条路径常常就拿回来了。所以失败时依次试下一路，而不是立刻下结论。
+BOOK_INFO_URLS = (
+    "https://weread.qq.com/web/book/info?bookId={book_id}",
+    "https://i.weread.qq.com/book/info?bookId={book_id}",
+    "https://weread.qq.com/api/book/info?bookId={book_id}",
+)
+
+# 三条路径全试一遍的总预算。单条请求本身有 REQUEST_TIMEOUT，
+# 这里再封一层，免得详情页把整轮提取拖住。
+BOOK_INFO_BUDGET = 25.0
+
+
+def _info_usable(data) -> bool:
+    """详情算不算取到了：有实质字段、且没有 errcode。"""
+    if not isinstance(data, dict) or not data:
+        return False
+    if data.get("errcode"):
+        return False
+    return any(
+        data.get(f) not in (None, "", 0)
+        for f in ("title", "isbn", "publisher", "category", "newRating", "author")
     )
-    if resp.status_code != 200:
-        log(f"bookinfo API status={resp.status_code} bookId={book_id}")
-        return {}, cookies
-    return resp.json(), cookies
+
+
+async def fetch_book_info_meta(
+    cookies: dict, book_id: str
+) -> tuple[dict, dict, dict]:
+    """拿书籍详情，失败时换路径重试，并回报这次取数的经过。
+
+    返回 (data, cookies, meta)：
+        data   取到的详情；全都拿不到时是最后一次的原始响应（可能带 errcode），
+               这样调用方还能把 errcode 写进判定依据里给人看
+        meta   {"attempts": n, "ok": bool, "errcode": int|None, "recovered": bool}
+               recovered=True 表示"第一条路径失败、后面某条救回来了"
+    """
+    meta = {"attempts": 0, "ok": False, "errcode": None, "recovered": False}
+    last: dict = {}
+
+    for attempt, url_tpl in enumerate(BOOK_INFO_URLS):
+        meta["attempts"] = attempt + 1
+        url = url_tpl.format(book_id=book_id)
+        try:
+            resp, cookies = await asyncio.wait_for(
+                request_with_retry("GET", url, cookies), timeout=BOOK_INFO_BUDGET
+            )
+        except (asyncio.TimeoutError, Exception) as e:  # noqa: BLE001
+            log(f"  bookinfo attempt {attempt + 1} failed bookId={book_id}: {e}")
+            last = {}
+            continue
+
+        if resp.status_code != 200:
+            log(f"  bookinfo attempt {attempt + 1} status={resp.status_code}")
+            last = {}
+            continue
+
+        try:
+            data = resp.json()
+        except Exception:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+
+        if _info_usable(data):
+            meta["ok"] = True
+            if attempt:
+                meta["recovered"] = True
+                log(f"  bookinfo recovered on attempt {attempt + 1} bookId={book_id}")
+            return data, cookies, meta
+
+        last = data
+        if data.get("errcode") is not None:
+            meta["errcode"] = data.get("errcode")
+        # 换下一路前退一拍：连着打多半是限流，白送请求只会更慢
+        if attempt + 1 < len(BOOK_INFO_URLS):
+            await asyncio.sleep(0.4 * (attempt + 1))
+
+    log(f"  bookinfo EMPTY for bookId={book_id} after {meta['attempts']} attempts")
+    return last, cookies, meta
+
+
+async def fetch_book_info(cookies: dict, book_id: str) -> tuple[dict, dict]:
+    data, cookies, _ = await fetch_book_info_meta(cookies, book_id)
+    return data, cookies
 
 
 async def fetch_chapters(cookies: dict, book_id: str) -> tuple[dict, dict]:

@@ -36,6 +36,7 @@ from services import weread_api as api  # noqa: E402
 from services.weread import (  # noqa: E402
     _deep_field,
     _normalize_star,
+    _response_rating,
     _review_type,
     classify_book_source,
     extract_my_rating,
@@ -78,15 +79,21 @@ async def probe(cookies: dict, max_books: int, verbose: bool) -> None:
         reviews_data, _ = await api.fetch_reviews(dict(cookies), bid)
         all_reviews = reviews_data.get("reviews", []) or []
 
-        my_rating, src = extract_my_rating(all_reviews)
-        source, signals = classify_book_source(book, info or {})
-        sources[source] = sources.get(source, 0) + 1
+        if my_rating is None:
+            my_rating, src = _response_rating(reviews_data), "response"
+        source, signals, confidence = classify_book_source(
+            book, info or {}, my_rating=my_rating
+        )
+        sources[f"{source}/{confidence}"] = sources.get(f"{source}/{confidence}", 0) + 1
         if my_rating is not None:
             rated += 1
             stars_seen.add(my_rating)
 
         print(f"[{i + 1}] {title}")
-        print(f"    评分: {my_rating}（来源 {src or '无'}）｜来源判定: {source}（{', '.join(signals) or '无证据'}）")
+        print(f"    评分: {my_rating}（来源 {src or '无'}）｜社区评分: {(info or {}).get('newRating')}")
+        print(f"    来源判定: {source}（置信 {confidence}）｜依据: {', '.join(signals) or '无'}")
+        if verbose:
+            print(f"    notebook 条目键: {sorted(book.keys())}")
 
         for r in all_reviews[:3]:
             if not isinstance(r, dict):
