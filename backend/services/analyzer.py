@@ -75,9 +75,11 @@ def _norm_books(books: list) -> list:
 # 下限 5 是为了避免"参考分类只有 1~2 本"时把书单压得几乎没有信息量。
 _LIST_MIN_QUOTA = 5
 
-# 阶段一痕迹语料：痕迹最多的若干本书，且总量受字符预算封顶。
-_TRACE_BOOK_CAP = 14
-_TRACE_CHAR_BUDGET = 18000
+# 阶段一痕迹语料按分类取：每个分类取痕迹最多的 2 本（该分类只有 1 本有痕迹
+# 时就取 1 本）。这里刻意不设总量与总字数上限——书单那一节已经按分类配额抽样，
+# 痕迹若再压一道总闸，排在前面的"痕迹最厚的几本"会把额度吃光，
+# 后面的分类一本都进不来，等于按痕迹量把书单又削了一遍。
+_TRACE_PER_CATEGORY = 2
 _TRACE_BM_PER_BOOK = 15
 _TRACE_BM_CHARS = 180
 _TRACE_RV_PER_BOOK = 6
@@ -94,7 +96,9 @@ _SAMPLE_RV_CHARS = 100
 _SAMPLE_BR_PER_BOOK = 2
 _SAMPLE_BR_CHARS = 150
 
-# 每个分类要几本、以及样本总量上限。总量上限是省 token 的闸门。
+# 每个分组要几本、以及上架书籍的样本总量上限（八组 × 2 本 = 16）。
+# 这个上限只对上架书籍生效：手动选入的本地上传文件是独立的另一类，
+# 由用户逐本挑出来，不该挤占这 16 个名额。
 _SAMPLE_PER_BUCKET = 2
 _SAMPLE_LIMIT = 16
 
@@ -182,6 +186,8 @@ _SYSTEM_BRIEF = """════ 数据说明书（开始分析前，请先把这
   按第二节的规则抽样。
 · 「详细样本」：少量书带正文摘录（划线原文、划线旁的批注、想法、书评），
   按第三节的规则挑出，每本都标了入选理由。
+· 「用户留下的文字」：第一阶段读的那份语料，每个分类取痕迹最多的 2 本
+  （该分类只有 1 本留下痕迹时就取 1 本），用户手动选入的本地上传文件全部列出。
 · 「第一阶段 · 知识画像」：同一份数据先跑过一轮痕迹分析得到的中间结论，
   你可以直接沿用。
 
@@ -247,7 +253,8 @@ _TRACES_TASK = """════ 你这一轮的输入：用户自己留下的文�
   M 是本次展示的条数，M 受展示上限截断。
 · 划线是他被什么击中，想法是他自己怎么想。两者分开看，也放在一起看——
   想法常常就是某条划线的批注。
-· 这里按痕迹多少排序列出前若干本书，是抽样。
+· 这里每个分类取痕迹最多的 2 本（该分类只有 1 本留下痕迹时就取 1 本），
+  按痕迹多少排序，是抽样；用户手动选入的本地上传文件全部列出。
 · 这一轮只产出对这个人的理解。
 
 本轮只回答一个问题：**写下这些文字的人，是什么样的一个人。**
@@ -512,6 +519,34 @@ def _trace_weight(b: dict, has_bm: bool, has_rv: bool, has_br: bool) -> int:
     return n
 
 
+def _has_trace(b: dict, has_bm: bool, has_rv: bool, has_br: bool) -> bool:
+    """这本书有没有值得读一读的东西：有痕迹，或用户为它写过介绍感悟。"""
+    return bool((b.get("userNote") or "").strip()) or _trace_weight(b, has_bm, has_rv, has_br) > 0
+
+
+def _trace_top_per_category(
+    books: list, has_bm: bool, has_rv: bool, has_br: bool
+) -> list:
+    """每个分类取痕迹最多的 2 本；该分类只有 1 本有痕迹时就取 1 本。
+
+    与"按痕迹量排序取前 N 本"的区别：后者会把额度全给痕迹最厚的那几本，
+    于是分类覆盖面被悄悄牺牲掉。按分类取能保证每个分类都有人说话。
+    """
+    groups: dict[str, list] = {}
+    for b in books:
+        if not b.get("title"):
+            continue
+        if not _has_trace(b, has_bm, has_rv, has_br):
+            continue
+        groups.setdefault(_cat_of(b), []).append(b)
+
+    out: list = []
+    for items in groups.values():
+        items.sort(key=lambda b: _trace_weight(b, has_bm, has_rv, has_br), reverse=True)
+        out.extend(items[:_TRACE_PER_CATEGORY])
+    return out
+
+
 def _truncate(text: str, limit: int) -> str:
     text = (text or "").strip()
     if len(text) <= limit:
@@ -525,19 +560,26 @@ def build_traces_view(data: dict) -> str:
     与阶段二的「详细样本」区别：
       · 这里的摘录上限高得多（划线 15 条 / 每条 180 字 vs 5 条 / 80 字），
         因为这一轮的全部任务就是读这些文字；
-      · 这里按痕迹量排序取前面的书，而不是取评分极端——极端评分是为了暴露
-        品味差异，但那会带进一堆没留下几个字的书，稀释痕迹。
+      · 这里按分类覆盖取书（每类痕迹最多的 2 本），而不是取评分极端——
+        极端评分是为了暴露品味差异，但那会带进一堆没留下几个字的书，稀释痕迹。
+
+    选取范围只有"每个分类取几本"这一条规则，没有总量上限、也没有总字数上限：
+    痕迹是这一轮唯一的输入，靠分类配额控制规模就够了，再压一道总闸会让
+    痕迹最厚的几本吃掉全部额度，其余分类一本都进不来。
     """
     books = _norm_books(data.get("books", []))
     has_bm, has_rv, has_br = _content_flags(books)
     if not (has_bm or has_rv or has_br):
         return ""
 
-    ranked = sorted(
-        (b for b in books if b.get("title")),
-        key=lambda b: _trace_weight(b, has_bm, has_rv, has_br),
-        reverse=True,
-    )
+    # 手动选入的本地上传文件是独立的一类：用户逐本挑出来的，
+    # 全部列出，不占分类配额，也不参与"每类 2 本"的规则。
+    picked_local = [b for b in books if b.get("userSlot")]
+    shelf = [b for b in books if not b.get("userSlot")]
+
+    selected = picked_local + _trace_top_per_category(shelf, has_bm, has_rv, has_br)
+    # 呈现时仍按痕迹多少降序：分类只是选书的筛子，不是阅读顺序
+    selected.sort(key=lambda b: _trace_weight(b, has_bm, has_rv, has_br), reverse=True)
 
     stats = data.get("stats", {})
     totals = []
@@ -552,19 +594,16 @@ def build_traces_view(data: dict) -> str:
         "=== 用户留下的文字（划线 / 想法 / 书评）===",
         f"  本次全量统计：纳入的书 {stats.get('totalBooks', 0) or len(books)} 本，"
         + ("；".join(totals) or "本次没有勾选任何内容类型"),
-        f"  下面按痕迹多少排序，最多列出 {_TRACE_BOOK_CAP} 本、"
-        f"总字数上限 {_TRACE_CHAR_BUDGET} 字。",
+        f"  下面每个分类取痕迹最多的 {_TRACE_PER_CATEGORY} 本"
+        f"（该分类只有 1 本留下痕迹时就取 1 本），按痕迹多少排序；"
+        f"用户手动选入的本地上传文件全部列出。",
     ]
-    used = 0
     listed = 0
-    for b in ranked:
-        if listed >= _TRACE_BOOK_CAP or used >= _TRACE_CHAR_BUDGET:
-            break
+    for b in selected:
         block = _render_traces_block(b, has_bm, has_rv, has_br)
         if not block:
             continue
         lines.append(block)
-        used += len(block)
         listed += 1
 
     if listed == 0:
@@ -588,7 +627,9 @@ def _render_traces_block(
     if b.get("userNote"):
         out.append(f"  用户对这本书的介绍与感悟: {_truncate(b['userNote'], 200)}")
 
-    wrote = False
+    # 用户为本地文件写的介绍感悟是他自己的句子，本身就算痕迹：
+    # 只写了自述、一条划线都没留的书也要进这一轮。
+    wrote = bool((b.get("userNote") or "").strip())
 
     if has_bm:
         marks = [m for m in (b.get("bookmarks") or [])
@@ -930,13 +971,21 @@ def _sample_books(books: list) -> list[tuple[dict, str]]:
       我评高/社区低 —— 用户偏爱但大众不买账
       我评低/社区高 —— 大众追捧但用户不以为然
     这两组的划线与想法态度往往最能说明问题。
+
+    ── 名额怎么分 ──────────────────────────────────────
+    八组各 2 本 = 16 本是**上架书籍**的份额，卡的是下面那八道排序。
+    用户手动选入的本地上传文件走独立的一条：由他逐本挑出来，
+    与评分状态、痕迹多少这些分组并列，额外计入，不挤占这 16 本。
+    （它们本来也不参与那八道排序——没有书名、没有站内评分，
+      混进"评分最高/最低"只会占掉真正有信息的名额。）
     """
     valid = [b for b in books if b.get("title")]
     if len(valid) <= 10:
         return [(b, "") for b in valid]
 
     taken: dict[str, str] = {}
-    out: list[tuple[dict, str]] = []
+    picked_out: list[tuple[dict, str]] = []
+    shelf_out: list[tuple[dict, str]] = []
 
     def take(sorted_list, n: int, reason: str) -> None:
         added = 0
@@ -945,24 +994,26 @@ def _sample_books(books: list) -> list[tuple[dict, str]]:
                 break
             bid = b.get("bookId")
             if bid in taken:
-                continue  # 已被前面的分类占用 → 顺延到下一本
+                continue  # 已被前面的分组占用 → 顺延到下一本
             taken[bid] = reason
-            out.append((b, reason))
+            shelf_out.append((b, reason))
             added += 1
-            if len(out) >= _SAMPLE_LIMIT:
+            if len(shelf_out) >= _SAMPLE_LIMIT:
                 return
 
-    # 用户手动选入的本地文件必须进样本：他既然挑了，就是想让它们被评价
-    for b in valid:
-        if b.get("userSlot") and b.get("bookId") not in taken:
-            taken[b["bookId"]] = "用户手动选入的本地文件"
-            out.append((b, "用户手动选入的本地文件"))
+    # 用户手动选入的本地文件必须进样本：他既然挑了，就是想让它们被评价。
+    # 独立于 16 本上限之外，不占上架书籍的份额。
+    picked = [b for b in valid if b.get("userSlot")]
+    shelf = [b for b in valid if not b.get("userSlot")]
+    for b in picked:
+        taken[b["bookId"]] = "用户手动选入的本地文件"
+        picked_out.append((b, "用户手动选入的本地文件"))
 
     def by_rating(desc: bool):
-        return sorted(valid, key=lambda b: (b.get("rating", 0) or 0), reverse=desc)
+        return sorted(shelf, key=lambda b: (b.get("rating", 0) or 0), reverse=desc)
 
     def by_my_rating(desc: bool):
-        rated = [b for b in valid if b.get("myRating") is not None]
+        rated = [b for b in shelf if b.get("myRating") is not None]
         return sorted(rated, key=lambda b: b.get("myRating") or 0, reverse=desc)
 
     take(by_rating(True), _SAMPLE_PER_BUCKET, "社区评分最高")
@@ -971,7 +1022,7 @@ def _sample_books(books: list) -> list[tuple[dict, str]]:
     take(by_my_rating(False), _SAMPLE_PER_BUCKET, "我的评价最低")
 
     # 倒挂两组：我评高/社区低、我评低/社区高
-    gapped = [(b, _rating_gap(b)) for b in valid]
+    gapped = [(b, _rating_gap(b)) for b in shelf]
     gapped = [(b, g) for b, g in gapped if g is not None]
     take(
         [b for b, _ in sorted(gapped, key=lambda x: -x[1])],
@@ -983,18 +1034,18 @@ def _sample_books(books: list) -> list[tuple[dict, str]]:
     )
 
     take(
-        sorted(valid, key=lambda b: b.get("totalBookmarks", 0) or 0, reverse=True),
+        sorted(shelf, key=lambda b: b.get("totalBookmarks", 0) or 0, reverse=True),
         _SAMPLE_PER_BUCKET, "划线最多",
     )
     take(
-        sorted(valid, key=lambda b: b.get("totalReviews", 0) or 0, reverse=True),
+        sorted(shelf, key=lambda b: b.get("totalReviews", 0) or 0, reverse=True),
         _SAMPLE_PER_BUCKET, "想法最多",
     )
 
     # 覆盖不同分类（每类 1 本）
     seen_cats: set[str] = set()
-    for b in valid:
-        if len(out) >= _SAMPLE_LIMIT:
+    for b in shelf:
+        if len(shelf_out) >= _SAMPLE_LIMIT:
             break
         if b.get("source") == "local":
             continue
@@ -1002,9 +1053,9 @@ def _sample_books(books: list) -> list[tuple[dict, str]]:
         if cat not in seen_cats and b.get("bookId") not in taken:
             seen_cats.add(cat)
             taken[b["bookId"]] = "分类覆盖"
-            out.append((b, "分类覆盖"))
+            shelf_out.append((b, "分类覆盖"))
 
-    return out
+    return picked_out + shelf_out
 
 
 # ── 两阶段报告生成 ─────────────────────────────────────

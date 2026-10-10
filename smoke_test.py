@@ -394,8 +394,54 @@ def test_analyzer_two_stage() -> None:
     traces = analyzer.build_traces_view(data)
     check("痕迹视图非空", len(traces) > 100, f"{len(traces)} 字符")
     check("痕迹视图标明总数与摘录数", "划线共" in traces and "以下摘录" in traces)
-    check("痕迹视图受字符预算封顶",
-          len(traces) <= analyzer._TRACE_CHAR_BUDGET + 4000, f"{len(traces)}")
+    # 痕迹语料按分类取，每类 2 本；不再有总量上限与总字数上限。
+    # 早期版本在这里压了一道 18000 字的总闸，痕迹最厚的几本就把额度吃光，
+    # 后面的分类一本都进不来 —— 等于按痕迹量把书单又削了一遍。
+    demo_books = build_demo_data()["books"]
+    check("痕迹视图不再受总字数预算封顶",
+          not hasattr(analyzer, "_TRACE_CHAR_BUDGET"))
+    check("痕迹视图按分类选取", analyzer._TRACE_PER_CATEGORY == 2)
+
+    def _mk_trace_book(i, cat, bm, rv):
+        return {
+            "bookId": f"t{i}", "title": f"痕迹书{i}", "category": cat,
+            "rating": 8.0, "myRating": None, "source": "weread",
+            "bookmarks": [{"markText": f"划线{j}"} for j in range(bm)],
+            "reviews": [{"content": f"想法{j}"} for j in range(rv)],
+            "bookReviews": [],
+        }
+
+    # 3 个分类各 6 本 → 每类取痕迹最多的 2 本 = 6 本，且三个分类都在
+    many = [_mk_trace_book(i, c, 6 - i, 0) for c in ("甲", "乙", "丙")
+            for i in range(6)]
+    picked_traces = analyzer._trace_top_per_category(many, True, True, True)
+    check("痕迹语料每类取 2 本", len(picked_traces) == 6, str(len(picked_traces)))
+    check("痕迹语料覆盖每个分类",
+          {b["category"] for b in picked_traces} == {"甲", "乙", "丙"},
+          str(sorted({b["category"] for b in picked_traces})))
+    # 痕迹最厚的那本不再独占额度：旧逻辑下 甲 类会拿走前几席
+    check("痕迹语料不受总量上限压制",
+          len(analyzer.build_traces_view({"books": many})) > 0)
+
+    # 手动选入的本地文件不占上架书籍那 16 个名额
+    def _mk_sample_book(i, bm, rv, local=False):
+        return {
+            "bookId": f"s{i}", "title": f"样本书{i}", "category": "A",
+            "rating": 9.9 - i * 0.2, "myRating": 1 + (i % 5),
+            "totalBookmarks": bm, "totalReviews": rv, "source":
+            "local" if local else "weread",
+            "userSlot": "印象最深" if local else "",
+            "bookmarks": [], "reviews": [], "bookReviews": [],
+        }
+
+    shelf_pool = [_mk_sample_book(i, 100 - i, 200 - 2 * i) for i in range(30)]
+    local_pool = [_mk_sample_book(100 + i, 1, 1, local=True) for i in range(3)]
+    samples = analyzer._sample_books(shelf_pool + local_pool)
+    n_local = sum(1 for b, _ in samples if b.get("source") == "local")
+    n_shelf = len(samples) - n_local
+    check("手动选入的本地文件全部进样本", n_local == 3, str(n_local))
+    check("本地文件不挤占上架书籍名额", n_shelf == analyzer._SAMPLE_LIMIT,
+          f"上架 {n_shelf} 本")
 
     # ── 背景陈述的关键条款
     # 条款本身要写成肯定式的口径说明；同时断言里面没有禁令式措辞——
