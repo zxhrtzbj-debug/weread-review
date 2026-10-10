@@ -65,9 +65,13 @@ for (let i = 3; i <= BOOK_TOTAL; i++) {
   });
 }
 
+// books 里混了一本本地上传的书（L1，带 userSlot），书架区应当把它排除掉
+const SHELF_TOTAL = BOOK_TOTAL - 1;
+
 const routes = {
   // let currentUid 是词法变量，挂不到 window 上，只能走真实的建会话路径
   'POST /api/auth/session': { uid: 'uid-test' },
+  'POST /api/data/delete-book/': { status: 'ok' },
   'POST /api/llm/config/': { status: 'ok' },
   'GET /api/data/local-picks/': {
     slots: ['印象最深', '最想推荐', '启发性最大', '平时最有用'],
@@ -147,15 +151,28 @@ function goLfPage(n) {
   const box = $('local-files-box');
   check('面板已显示', !box.classList.contains('hidden'));
   check('渲染出 20 行而不是 45 行', rows().length === 20, `实际 ${rows().length}`);
-  check('计数文案给的是全量', new RegExp(`共 ${LF_TOTAL} 本，已选入 0 本`).test($('lf-count').textContent),
+  check('计数文案给的是全量', new RegExp(`共 ${LF_TOTAL} 本，已归类 0 本`).test($('lf-count').textContent),
     $('lf-count').textContent);
+  check('折叠标题上写明未归类的不参与评价', /不参与评价/.test($('lf-tip').textContent),
+    $('lf-tip').textContent);
+  check('每一行都有归类下拉', Array.from(rows()).every((r) => r.querySelector('[data-role=slot]')));
+  check('每一行都有感悟输入框', Array.from(rows()).every((r) => r.querySelector('[data-role=note]')));
+  check('每一行都有改判与删除出口',
+    Array.from(rows()).every((r) => r.querySelector('.lf-unsplit') && r.querySelector('.lf-del')));
   check('判定依据已展示', /书名带电子书扩展名/.test(rows()[0].textContent));
   check('有评分的显示星级', /★/.test(rows()[1].textContent), rows()[1].textContent.slice(0, 80));
 
-  console.log('\n[2] 两块列表都可折叠');
+  console.log('\n[2] 两块列表各占一个折叠页：本地上传在上、书架在下');
   check('本地面板是 details 容器', $('lf-details') && $('lf-details').tagName === 'DETAILS');
-  check('本地面板默认收起', $('lf-details').open === false);
   check('书单是 details 容器', $('books-details') && $('books-details').tagName === 'DETAILS');
+  check('本地上传排在书架之前',
+    $('local-files-box').compareDocumentPosition($('books-details'))
+      & window.Node.DOCUMENT_POSITION_FOLLOWING ? true : false);
+  // 交互点在折叠里，全都没归类时默认摊开，否则用户根本看不见它
+  check('还有未归类的文件时默认摊开', $('lf-details').open === true);
+  check('标题写明是本地上传', /本地上传/.test($('lf-details').querySelector('.lf-title').textContent));
+  check('书架标题写明是书架书籍', /书架书籍/.test($('books-details').querySelector('.bl-title').textContent));
+  check('书架区说明本地文件不在这里', /单独一区/.test($('books-details').querySelector('.bl-desc').textContent));
 
   console.log('\n[3] 翻页');
   check('翻页器显示全量本数', new RegExp(`共 ${LF_TOTAL} 本`).test($('lf-pager-top').textContent),
@@ -208,6 +225,8 @@ function goLfPage(n) {
     /通勤读物/.test(rows()[0].querySelector('[data-role=slot]').innerHTML));
   check('已写的感悟没被重绘吃掉',
     /第1页写的感悟/.test(rows()[4].querySelector('[data-role=note]').value));
+  check('归好类的文件在自己的行上标出来', /已归入/.test(rows()[0].textContent),
+    rows()[0].textContent.slice(0, 60));
 
   console.log('\n[7] 「有评分必然是上架书籍」批量出口');
   const ratedBtn = $('lf-restore-rated');
@@ -226,6 +245,15 @@ function goLfPage(n) {
   check('source=weread 单本也能改', one && one.body.bookId === 'L1' && one.body.source === 'weread',
     one && JSON.stringify(one.body));
 
+  console.log('\n[8b] 本地文件就地删除（这区就是它们的审核入口）');
+  posted.length = 0;
+  check('删除按钮在每一行上', !!rows()[2].querySelector('.lf-del'));
+  rows()[2].querySelector('.lf-del').click();
+  await tick(80);
+  const del = posted.filter((p) => /data\/delete-book/.test(p.key)).pop();
+  check('发出了删除请求', !!del, posted.map((p) => p.key).join(','));
+  check('删的是点的那本', del && del.body.bookId === 'L3', del && JSON.stringify(del.body));
+
   console.log('\n[9] 搜索过滤');
   const lfSearch = $('lf-search');
   lfSearch.value = '资料7';
@@ -241,17 +269,21 @@ function goLfPage(n) {
   await window.loadReviewData();
   check('书单容器已显示', !$('books-details').classList.contains('hidden'));
   check('只渲染 20 张卡', cards().length === 20, `实际 ${cards().length}`);
-  check('计数是全量而不是当前页', new RegExp(`共 ${BOOK_TOTAL} 本`).test($('books-count').textContent),
+  check('计数是全量而不是当前页', new RegExp(`共 ${SHELF_TOTAL} 本`).test($('books-count').textContent),
     $('books-count').textContent);
   check('继续按钮给的是全量本数（不是 20）',
-    new RegExp(`\\(${BOOK_TOTAL} 本\\)`).test($('to-ai-btn').textContent),
+    new RegExp(`书架 ${SHELF_TOTAL} 本.*本地 1 本`).test($('to-ai-btn').textContent),
     $('to-ai-btn').textContent);
-  check('本地书带标记与分类', /本地上传｜印象最深/.test(cards()[1].textContent),
-    cards()[1].textContent.slice(0, 60));
-  check('用户自述显示在卡片里', /我自己写的规划/.test(cards()[1].textContent));
+  // 本地书（L1）带着 userSlot 出现在 books 里，但它属于上方那一区
+  check('本地上传的书不混进书架区',
+    !Array.from(cards()).some((c) => c.dataset.bookId === 'L1'),
+    Array.from(cards()).map((c) => c.dataset.bookId).slice(0, 5).join(','));
+  check('本地上传区列出全部本地文件（含已归类的）',
+    new RegExp(`共 ${LF_TOTAL} 本`).test($('lf-count').textContent), $('lf-count').textContent);
   check('统计区有「我打过分的书」', /我打过分的书/.test($('stats-summary').textContent));
   check('统计区有「详情未取到」', /详情未取到/.test($('stats-summary').textContent),
     $('stats-summary').textContent.slice(0, 120));
+  check('统计区单列了已归类的本地文件数', /其中已归类/.test($('stats-summary').textContent));
 
   console.log('\n[11] 低置信书带灰标');
   const low = Array.from(cards()).find((c) => /详情未取到/.test(c.textContent));
@@ -267,7 +299,8 @@ function goLfPage(n) {
   check('第 2 页仍是 20 张卡', cards().length === 20, `实际 ${cards().length}`);
   check('第 2 页首本是第 21 本', /书2[0-9]|作者2[0-9]/.test(cards()[0].textContent),
     cards()[0].textContent.slice(0, 40));
-  check('翻页后继续按钮仍报全量', new RegExp(`\\(${BOOK_TOTAL} 本\\)`).test($('to-ai-btn').textContent),
+  check('翻页后继续按钮仍报全量',
+    new RegExp(`书架 ${SHELF_TOTAL} 本`).test($('to-ai-btn').textContent),
     $('to-ai-btn').textContent);
 
   console.log('\n[13] 书单搜索');

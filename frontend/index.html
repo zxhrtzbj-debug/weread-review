@@ -290,6 +290,11 @@ pre {
 .lf-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .lf-title { font-size: 14px; font-weight: 600; color: #8a5a00; }
 .lf-count { font-size: 12px; color: #a1803a; }
+/* 折叠标题上那句"还没归类的不参与评价"：交互点在折叠里，不点开也要看得见 */
+.lf-tip {
+  font-size: 11px; color: #856404; background: #ffe9b8; border-radius: 10px;
+  padding: 1px 8px;
+}
 .lf-desc { font-size: 12px; color: #8a6d3b; line-height: 1.6; margin: 6px 0 10px; }
 .lf-empty { font-size: 13px; color: #999; padding: 6px 0; }
 .lf-row {
@@ -306,11 +311,19 @@ pre {
   font-size: 13px; font-family: inherit;
 }
 .lf-row textarea { grid-column: 1 / -1; min-height: 58px; resize: vertical; }
+.lf-btns { display: flex; gap: 6px; margin-top: 6px; }
 .lf-unsplit {
-  margin-top: 6px; background: none; border: 1px solid #e0e0e0; color: #8a5a00;
-  font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer; width: 100%;
+  flex: 1; margin-top: 0; background: none; border: 1px solid #e0e0e0; color: #8a5a00;
+  font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
 }
 .lf-unsplit:hover { border-color: #07c160; color: #07c160; background: #f6fffa; }
+/* 不想要的本地文件就地删掉：这区就是它们的审核入口 */
+.lf-del {
+  background: none; border: 1px solid #f0d6d6; color: #c0392b;
+  font-size: 11px; padding: 3px 8px; border-radius: 4px; cursor: pointer;
+}
+.lf-del:hover { border-color: #c0392b; background: #fdf3f2; }
+.lf-in { font-size: 11px; color: #07c160; margin-top: 4px; }
 .lf-row select:focus, .lf-row textarea:focus { border-color: #07c160; outline: none; }
 .lf-slot-label { font-size: 12px; color: #666; display: block; margin-bottom: 2px; }
 .lf-actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
@@ -359,6 +372,7 @@ pre {
 }
 .bl-title { font-size: 14px; font-weight: 600; color: #333; }
 .bl-count { font-size: 12px; color: #888; }
+.bl-desc { font-size: 12px; color: #888; line-height: 1.6; margin: 6px 0 0; }
 .pg-empty { font-size: 13px; color: #999; padding: 12px 2px; }
 
 /* ── Search panel (step 5) ── */
@@ -677,7 +691,8 @@ pre {
 <!-- ═══════════════════════════════════════ -->
 <div class="card step-panel hidden" id="step-5">
   <h2><span class="step-badge">5</span> 审核书籍</h2>
-  <p class="card-desc">查看已提取的书籍数据，你可以删除不希望参与评价的书籍，也可以只保留某一类内容以节约 token。</p>
+  <p class="card-desc">查看已提取的书籍数据，你可以删除不希望参与评价的书籍，也可以只保留某一类内容以节约 token。
+    书籍分成两区：<b>本地上传</b>在上（自己上传的文件，需要你给它们归类才会参与评价），<b>书架书籍</b>在下。</p>
 
   <!-- ── 内容分类筛选 ── -->
   <div class="cf-bar">
@@ -703,18 +718,20 @@ pre {
     <div class="cf-estimate" id="cf-estimate">计算中…</div>
   </div>
 
-  <!-- ── 本地上传文件：书名常是文件名，默认不进书单，按需选入 ── -->
+  <!-- ── 本地上传：与书架书籍分开审核，默认不进书单，按需归入分类 ── -->
   <div class="lf-box hidden" id="local-files-box">
     <details id="lf-details">
       <summary>
-        <span class="lf-title">📁 本地上传文件</span>
-        <span class="lf-count" id="lf-count"></span>
+        <span class="lf-title">📁 本地上传</span>
+        <span class="bl-count" id="lf-count"></span>
+        <span class="lf-tip" id="lf-tip"></span>
       </summary>
       <p class="lf-desc">
-        这些是你在微信读书里<b>自己上传的文件</b>（书名往往就是文件名），
-        它们没有分类、没有站内评分，默认<b>不进入书单</b>——否则 AI 会对着一串 PDF 名字编造阅读品味。
-        如果你想让其中几本参与评价，给它们挑一个分类、写一段介绍感悟；
+        这些是你在微信读书里<b>自己上传的文件</b>（书名往往就是文件名）：
+        没有分类、没有站内评分，默认<b>不进入书单</b>——否则 AI 会对着一串 PDF 名字编造阅读品味。
+        想让哪本参与评价，就在这里给它挑一个分类、写一段介绍感悟；
         这段文字会放在该书的划线与想法<b>前面</b>，作为你本人的态度说明。
+        本区独立于下方书架：书架的搜索、翻页、删除都碰不到这些文件，反过来也一样。
       </p>
       <div class="pg-tools">
         <input type="search" id="lf-search" class="pg-search"
@@ -738,12 +755,16 @@ pre {
 
   <div id="stats-summary"></div>
 
-  <!-- ── 书单：同样折叠 + 分页。几千本硬铺开既卡又容易漏看 ── -->
+  <!-- ── 书架书单：同样折叠 + 分页。几千本硬铺开既卡又容易漏看 ── -->
   <details id="books-details" class="hidden">
     <summary>
-      <span class="bl-title">📚 书单</span>
+      <span class="bl-title">📚 书架书籍</span>
       <span class="bl-count" id="books-count"></span>
     </summary>
+    <p class="bl-desc">
+      微信读书书架上的书。本地上传的文件在上方单独一区，不在这里出现；
+      归好类的本地文件会计入本次评价，但不占这里的条目。
+    </p>
     <div class="pg-tools">
       <input type="search" id="books-search" class="pg-search"
              placeholder="按书名或作者搜索">
@@ -979,6 +1000,7 @@ function resetAll() {
   localPicks = {};
   lfPage = 1;
   lfQuery = '';
+  lfUserToggled = false;
   reviewBooks = [];
   bookPage = 1;
   bookQuery = '';
@@ -1887,6 +1909,7 @@ let localSlots = [];
 let localPicks = {};   // {bookId: {slot, note}} —— 含未保存的草稿
 let lfPage = 1;
 let lfQuery = '';
+let lfUserToggled = false;  // 用户手动开合过本地上传区之后，不再自动开合
 
 function starText(v) {
   if (v === null || v === undefined) return '';
@@ -1948,7 +1971,11 @@ function renderLocalFiles() {
 
   var picked = 0;
   Object.keys(localPicks).forEach(function(k) { if (localPicks[k] && localPicks[k].slot) picked++; });
-  $('lf-count').textContent = '共 ' + localFiles.length + ' 本，已选入 ' + picked + ' 本';
+  $('lf-count').textContent = '共 ' + localFiles.length + ' 本，已归类 ' + picked + ' 本';
+  $('lf-tip').textContent = picked < localFiles.length ? '未归类的不参与评价' : '全部已归类';
+  // 交互点在折叠里：还有没归类的文件时默认摊开，否则它就只是个不起眼的标题。
+  // 用户手动开合过之后就听用户的，不再自动改。
+  if (!lfUserToggled) $('lf-details').open = (picked < localFiles.length);
 
   var ratedBtn = $('lf-restore-rated');
   if (ratedBtn) {
@@ -1987,11 +2014,16 @@ function renderLocalFiles() {
         +   '<div class="lf-signals">判定依据：'
         +     escapeHtml((f.sourceSignals || []).join('、') || '未记录') + '</div>'
         +   '<div class="lf-counts">' + counts + '</div>'
+        +   (pick.slot ? '<div class="lf-in">✔ 已归入「' + escapeHtml(pick.slot) + '」，会参与本次评价</div>' : '')
         + '</div>'
         + '<div><label class="lf-slot-label">归类为</label>'
         +   '<select data-role="slot">' + opts + '</select>'
-        +   '<button class="lf-unsplit" data-book-id="' + escapeHtml(f.bookId) + '">'
-        +     '↩︎ 其实是上架书籍</button></div>'
+        +   '<div class="lf-btns">'
+        +     '<button class="lf-unsplit" data-book-id="' + escapeHtml(f.bookId) + '">'
+        +       '↩︎ 其实是上架书</button>'
+        +     '<button class="lf-del" data-book-id="' + escapeHtml(f.bookId) + '">'
+        +       '🗑️ 删掉</button>'
+        +   '</div></div>'
         + '<textarea data-role="note" placeholder="写一段你对这本书的介绍与感悟（会放在该书的划线与想法前面）">'
         +   escapeHtml(pick.note || '') + '</textarea>'
         + '</div>';
@@ -2038,7 +2070,7 @@ $('lf-save-btn').addEventListener('click', async function() {
     // 直接 localPicks = d.picks 会把翻页前写的东西抹掉。
     localPicks = Object.assign({}, localPicks, d.picks || {});
     renderLocalFiles();
-    $('lf-hint').textContent = '✅ 已保存，选入的书会出现在书单末尾';
+    $('lf-hint').textContent = '✅ 已保存，归好类的会参与本次评价';
     setTimeout(function() { $('lf-hint').textContent = ''; }, 3000);
     await loadReviewData();
   } catch (e) {
@@ -2063,6 +2095,25 @@ async function restoreAsShelfBook(bookId) {
     localPicks = {};
     await loadLocalFiles();
     await loadReviewData();
+  } catch (e) {
+    $('lf-hint').textContent = '❌ ' + e.message;
+  }
+}
+
+// 本地文件也要能在审核阶段删掉：它们不在书架书单里出现，
+// 没有这个按钮的话，唯一出口就是"不归类"，而那只是不参与评价、书还在。
+async function deleteLocalFile(bookId) {
+  if (!currentUid || !bookId) return;
+  try {
+    var res = await fetch(apiUrl('/api/data/delete-book/', currentUid), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookId: bookId }),
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || '删除失败');
+    deletedBookIds.add(bookId);
+    $('lf-hint').textContent = '✅ 已删除';
+    setTimeout(function() { $('lf-hint').textContent = ''; }, 3000);
+    await loadReviewData();  // 内部会重刷本地上传区、书架区和 token 估算
   } catch (e) {
     $('lf-hint').textContent = '❌ ' + e.message;
   }
@@ -2096,10 +2147,16 @@ async function restoreRatedAsShelfBooks() {
 
 $('lf-restore-rated').addEventListener('click', restoreRatedAsShelfBooks);
 
+$('lf-details').addEventListener('toggle', function() {
+  // 用户一旦自己开合过，就别再替他决定默认状态
+  lfUserToggled = true;
+});
+
 $('lf-rows').addEventListener('click', function(e) {
-  var btn = e.target.closest('.lf-unsplit');
-  if (!btn) return;
-  restoreAsShelfBook(btn.dataset.bookId);
+  var unsplit = e.target.closest('.lf-unsplit');
+  if (unsplit) { restoreAsShelfBook(unsplit.dataset.bookId); return; }
+  var del = e.target.closest('.lf-del');
+  if (del) { deleteLocalFile(del.dataset.bookId); }
 });
 
 $('lf-add-slot-btn').addEventListener('click', function() {
@@ -2237,6 +2294,7 @@ function renderReviewStep(data) {
       '<div class="stat-box"><div class="num">' + (stats.totalBookReviews || 0) + '</div><div class="label">书评条数</div></div>' +
       '<div class="stat-box"><div class="num">' + (stats.ratedBooks || 0) + '</div><div class="label">我打过分的书</div></div>' +
       '<div class="stat-box"><div class="num">' + (stats.localFiles || 0) + '</div><div class="label">本地上传文件</div></div>' +
+      '<div class="stat-box"><div class="num">' + (stats.localPicked || 0) + '</div><div class="label">其中已归类</div></div>' +
       '<div class="stat-box"><div class="num">' + (stats.uncertainBooks || 0) + '</div><div class="label">详情未取到</div></div>' +
       '</div>';
 
@@ -2258,7 +2316,8 @@ function renderReviewStep(data) {
   bookPage = 1;
   show('books-details');
   if (!books.length) {
-    $('books-container').innerHTML = '<p>没有找到有笔记的书籍</p>';
+    $('books-container').innerHTML = '<p class="pg-empty">书架上一本都没进本次评价。'
+      + '你上传过的本地文件在上方「📁 本地上传」一区，给它们归好类就会参与评价。</p>';
     $('books-count').textContent = '共 0 本';
     $('to-ai-btn').disabled = false;
     return;
@@ -2399,29 +2458,43 @@ function bookMatches(b) {
       || (b.author || '').toLowerCase().indexOf(q) >= 0;
 }
 
+// 书架区只放上架书籍。本地上传的书在上方自己那一区有自己的一套交互
+// （归类 / 感悟 / 改判 / 删除），混进书架既找不到，又会被强行套用
+// 上架书的卡片——那上面根本没有归类入口。
+function isShelfBook(b) { return b.source !== 'local'; }
+
+function shelfEntries() {
+  var out = [];
+  reviewBooks.forEach(function(b, i) { if (isShelfBook(b)) out.push({ b: b, i: i }); });
+  return out;
+}
+
 function renderBookList() {
   var el = $('books-container');
   // 保留全量下标：data-bi 用的是它在 reviewBooks 里的位置，翻页也不变
-  var kept = [];
-  reviewBooks.forEach(function(b, i) { if (bookMatches(b)) kept.push({ b: b, i: i }); });
+  var shelf = shelfEntries();
+  var kept = shelf.filter(function(o) { return bookMatches(o.b); });
 
   var pg = paginateRows(kept, bookPage);
   bookPage = pg.page;
 
   var head = '<p style="font-size:14px;color:#666;margin-bottom:8px;">共 '
-    + reviewBooks.length + ' 本书（点击展开详情，可删除不想评价的书籍）';
-  if (kept.length !== reviewBooks.length) head += '，当前筛出 ' + kept.length + ' 本';
+    + shelf.length + ' 本上架书籍（点击展开详情，可删除不想评价的书籍）';
+  if (kept.length !== shelf.length) head += '，当前筛出 ' + kept.length + ' 本';
   head += '：</p>';
 
   var listHtml = head;
-  if (!pg.rows.length) {
+  if (!shelf.length) {
+    listHtml += '<div class="pg-empty">书架上一本都没进本次评价'
+      + '（本地上传的文件在上方单独一区）</div>';
+  } else if (!pg.rows.length) {
     listHtml += '<div class="pg-empty">没有匹配「' + escapeHtml(bookQuery) + '」的书</div>';
   } else {
     pg.rows.forEach(function(o) { listHtml += bookCardHtml(o.b, o.i); });
   }
   el.innerHTML = listHtml;
 
-  var alive = reviewBooks.filter(function(b) { return !deletedBookIds.has(b.bookId); }).length;
+  var alive = shelf.filter(function(o) { return !deletedBookIds.has(o.b.bookId); }).length;
   $('books-count').textContent = '共 ' + alive + ' 本'
     + (deletedBookIds.size ? '（已删除 ' + deletedBookIds.size + ' 本）' : '');
 
@@ -2441,15 +2514,17 @@ $('books-search').addEventListener('input', function() {
 
 function updateProceedButton() {
   // 分页之后 DOM 里只有当前页，数 DOM 会数出"只剩 20 本"这种假象。
-  // 这里必须以全量数组为准。
-  var visibleBooks = reviewBooks.filter(function(b) {
+  // 这里必须以全量数组为准，本地上传里已归类的那些也在里面。
+  var visible = reviewBooks.filter(function(b) {
     return !deletedBookIds.has(b.bookId);
-  }).length;
-  $('to-ai-btn').disabled = (visibleBooks === 0);
-  if (visibleBooks === 0) {
+  });
+  var localN = visible.filter(function(b) { return !isShelfBook(b); }).length;
+  $('to-ai-btn').disabled = (visible.length === 0);
+  if (visible.length === 0) {
     $('to-ai-btn').textContent = '⚠️ 请至少保留一本书';
   } else {
-    $('to-ai-btn').textContent = '继续到 AI 评价 → (' + visibleBooks + ' 本)';
+    $('to-ai-btn').textContent = '继续到 AI 评价 →（书架 ' + (visible.length - localN)
+      + ' 本' + (localN ? ' + 本地 ' + localN + ' 本' : '') + '）';
   }
 }
 
